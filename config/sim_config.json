@@ -1,0 +1,16 @@
+{
+  "map": "maps/complex_map.json",
+  "port": 8000,
+  "tick_hz": 20,
+  "amr_speed": 1.0,
+  "amr_width": 0.8,
+  "amr_length": 1.2,
+  "beacon_port": 9999,
+  "beacon_interval_s": 1.0,
+  "amrs": [
+    {"id": "amr-1", "start_node": "n1"},
+    {"id": "amr-2", "start_node": "n3"},
+    {"id": "amr-3", "start_node": "n7"},
+    {"id": "amr-4", "start_node": "n12"}
+  ]
+}

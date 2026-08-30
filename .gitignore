@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environment / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node / frontend build output
+viewer/node_modules/
+viewer/dist/
+viewer/.vite/
+
+# Coverage / logs
+coverage/
+*.log
+
+# Local env files
+.env
+.env.*
