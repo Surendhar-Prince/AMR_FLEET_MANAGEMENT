@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
-
+from typing import Optional
 import networkx as nx
+
+from backend.parasite.node import ParasiteNode
 
 
 @dataclass
@@ -13,12 +15,22 @@ class AMR:
     path: list[str] = field(default_factory=list)
     progress: float = 0.0
     colliding: bool = False
+    priority: int = 1
+    state_label: str = "IDLE"  # IDLE, BIDDING, TRANSIT, YIELDING, FAILED
     queued_targets: list[str] = field(default_factory=list)
+    parasite: Optional[ParasiteNode] = None
 
     @classmethod
-    def at_node(cls, amr_id: str, node_id: str, graph: nx.DiGraph) -> "AMR":
+    def at_node(cls, amr_id: str, node_id: str, graph: nx.DiGraph, initial_battery: float = 100.0) -> "AMR":
         node = graph.nodes[node_id]
-        return cls(id=amr_id, current_node=node_id, x=node["x"], y=node["y"])
+        parasite = ParasiteNode(agent_id=amr_id, graph=graph, initial_battery=initial_battery)
+        return cls(
+            id=amr_id,
+            current_node=node_id,
+            x=node["x"],
+            y=node["y"],
+            parasite=parasite,
+        )
 
     def enqueue_target(self, target: str) -> None:
         self.queued_targets.append(target)
@@ -30,8 +42,9 @@ class AMR:
             return
 
         target = self.queued_targets.pop(0)
-        from backend.map import shortest_path
+        from backend.map import astar_path
 
-        route = shortest_path(graph, self.current_node, target)
+        route = astar_path(graph, self.current_node, target)
         self.path = route[1:]
         self.progress = 0.0
+        self.state_label = "TRANSIT"

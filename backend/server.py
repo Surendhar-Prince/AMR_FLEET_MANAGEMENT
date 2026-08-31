@@ -1,6 +1,8 @@
 import asyncio
 import os
+import uuid
 from contextlib import asynccontextmanager
+from typing import Optional
 
 import networkx as nx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -18,6 +20,13 @@ VIEWER_DIST_DIR = "viewer/dist"
 class OrderRequest(BaseModel):
     amr_id: str
     target_node: str
+
+
+class TaskCreateRequest(BaseModel):
+    task_id: Optional[str] = None
+    pickup_node: str
+    dropoff_node: str
+    priority: int = 1
 
 
 def build_app(config: Config) -> FastAPI:
@@ -86,6 +95,65 @@ def build_app(config: Config) -> FastAPI:
         except nx.NetworkXNoPath:
             raise HTTPException(status_code=422, detail="no path to target_node") from None
         return {"status": "ok"}
+
+    @app.post("/api/tasks")
+    def create_task(req: TaskCreateRequest) -> dict:
+        tid = req.task_id or f"task-{uuid.uuid4().hex[:6]}"
+        # Check if pickup or dropoff station is currently occupied by a disabled/failed AMR
+        for amr in simulation.amrs.values():
+            if amr.state_label == "FAILED" or (amr.parasite and not amr.parasite.is_alive):
+                if req.pickup_node == amr.current_node:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Pickup Station {req.pickup_node} is physically blocked by disabled robot {amr.id}! Recover robot first.",
+                    )
+                if req.dropoff_node == amr.current_node:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Dropoff Station {req.dropoff_node} is physically blocked by disabled robot {amr.id}! Recover robot first.",
+                    )
+
+        try:
+            task = simulation.add_task(
+                task_id=tid,
+                pickup_node=req.pickup_node,
+                dropoff_node=req.dropoff_node,
+                priority=req.priority,
+            )
+            return {"status": "ok", "task": task.to_dict()}
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.get("/api/tasks")
+    def get_tasks() -> list[dict]:
+        return [t.to_dict() for t in simulation.tasks.values()]
+
+    @app.get("/api/cbba/state")
+    def get_cbba_state() -> dict:
+        return simulation.get_cbba_state()
+
+    @app.post("/api/nodes/{amr_id}/kill")
+    def kill_node(amr_id: str) -> dict:
+        if amr_id not in simulation.amrs:
+            raise HTTPException(status_code=404, detail=f"unknown amr_id: {amr_id}")
+        simulation.kill_node(amr_id)
+        return {"status": "ok", "message": f"AMR {amr_id} killed"}
+
+    @app.post("/api/nodes/{amr_id}/recover")
+    def recover_node(amr_id: str) -> dict:
+        if amr_id not in simulation.amrs:
+            raise HTTPException(status_code=404, detail=f"unknown amr_id: {amr_id}")
+        simulation.recover_node(amr_id)
+        return {"status": "ok", "message": f"AMR {amr_id} recovered"}
+
+    @app.post("/api/nodes/{amr_id}/charge")
+    def charge_node(amr_id: str) -> dict:
+        if amr_id not in simulation.amrs:
+            raise HTTPException(status_code=404, detail=f"unknown amr_id: {amr_id}")
+        amr = simulation.amrs[amr_id]
+        if amr.parasite:
+            amr.parasite.battery_soc = 15.0  # Trigger low-battery return to charge pad
+        return {"status": "ok", "message": f"AMR {amr_id} dispatched to charging bay"}
 
     @app.get("/api/amrs")
     def get_amrs() -> list[dict]:

@@ -1,0 +1,58 @@
+# AMR Fleet Management Simulator - Capability Audit Report
+
+**Date:** August 31, 2026  
+**Repository:** `Surendhar-Prince/AMR_FLEET_MANAGEMENT`  
+**Current State:** Verified & Operational (35/35 unit tests passing)
+
+---
+
+## 1. Executive Summary
+
+The project is currently a **minimal 3D Autonomous Mobile Robot (AMR) simulator**. It provides an interactive 3D browser visualizer, shortest-path road navigation, basic node blocking, and REST/WebSocket APIs. 
+
+However, it operates with **manual task assignment** and has **no dynamic routing or deadlock resolution algorithms (such as CBBA)**.
+
+---
+
+## 2. Feature Matrix
+
+| Feature Domain | Feature Name | Status | Technical Details |
+| :--- | :--- | :---: | :--- |
+| **Visualization** | 3D Warehouse Canvas | ✅ **Present** | Built with React + Three.js (`viewer/src/Scene.jsx`). |
+| | Robot Poses & Wheel Spin | ✅ **Present** | Dynamic heading rotation and real-time angular wheel rotation. |
+| | Interactive Camera | ✅ **Present** | OrbitControls (zoom, pan, rotate). |
+| | UI Dispatch Buttons | ❌ **Missing** | Viewer is read-only; orders must be submitted via REST API. |
+| **Routing & Motion** | Graph-based Maps | ✅ **Present** | Defined in `maps/*.json` as nodes and directed edges. |
+| | Static Shortest Path | ✅ **Present** | Calculated once at dispatch using `networkx.shortest_path`. |
+| | Dynamic Detours / Rerouting | ❌ **Missing** | Robots will not take alternative routes when paths are congested. |
+| **Collision & Safety** | SAT Bounding Box Check | ✅ **Present** | Separating Axis Theorem detects physical overlaps (`backend/collision.py`). |
+| | Node Wait Check | ✅ **Present** | Robot waits if target node is occupied (`_is_next_node_blocked`). |
+| | **Deadlock Prevention / Yielding** | ❌ **Missing** | Robots facing each other on bidirectional tracks freeze permanently. |
+| **Task Allocation** | Manual API Dispatch | ✅ **Present** | `POST /api/orders` specifying explicit `amr_id` and `target_node`. |
+| | **CBBA Consensus Allocation** | ❌ **Missing** | No peer-to-peer auction/consensus bidding for autonomous task bundles. |
+| | Central Autonomous Dispatcher | ❌ **Missing** | No automated queue assignment for idle robots. |
+| **Robot Subsystems** | Battery / SOC Simulation | ❌ **Missing** | No energy depletion, charging stations, or low-battery return. |
+| | Cargo / Payload State | ❌ **Missing** | No capacity, pick/drop cargo logic, or pallet stations. |
+| **Networking** | WebSocket Telemetry | ✅ **Present** | Low-latency 50Hz broadcast to browser (`backend/server.py`). |
+| | Multi-Machine UDP Beacon | ✅ **Present** | LAN broadcasting for distributed instances (`backend/beacon.py`). |
+
+---
+
+## 3. Code Verification Reference
+
+- **Task Assignment Logic**: [`backend/server.py:L76-L89`](file:///c:/Users/srima/react%20projects/fleat_managment/backend/server.py#L76-L89)
+  - Requires manual `OrderRequest(amr_id, target_node)`.
+- **Node Collision & Deadlock Vulnerability**: [`backend/simulation.py:L47-L57`](file:///c:/Users/srima/react%20projects/fleat_managment/backend/simulation.py#L47-L57)
+  - Only checks `other.current_node == next_node` without yielding or rerouting.
+- **AMR State Structure**: [`backend/amr.py:L7-L17`](file:///c:/Users/srima/react%20projects/fleat_managment/backend/amr.py#L7-L17)
+  - Tracks coordinates and path; does not contain battery or payload attributes.
+- **3D Viewer Component**: [`viewer/src/Scene.jsx`](file:///c:/Users/srima/react%20projects/fleat_managment/viewer/src/Scene.jsx)
+  - Renders map nodes, arrows, and robot chassis with spinning wheels.
+
+---
+
+## 4. Recommended Roadmap to Autonomy
+
+1. **Implement CBBA Engine**: Add decentralized task bidding so any published task is claimed by the optimal robot.
+2. **Implement Deadlock Prevention**: Add reservation tables / token-based lane yielding to prevent head-on standstills.
+3. **Add Interactive Dispatch UI**: Add click-to-dispatch controls in the React frontend.

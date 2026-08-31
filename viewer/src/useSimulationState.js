@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { AmrState } from "./types";
 
-export function useSimulationState(): AmrState[] {
-  const [amrs, setAmrs] = useState<AmrState[]>([]);
-  const socketRef = useRef<WebSocket | null>(null);
+export function useSimulationState() {
+  const [amrs, setAmrs] = useState([]);
+  const socketRef = useRef(null);
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -11,7 +10,7 @@ export function useSimulationState(): AmrState[] {
     socketRef.current = socket;
 
     socket.onmessage = (event) => {
-      setAmrs(JSON.parse(event.data) as AmrState[]);
+      setAmrs(JSON.parse(event.data));
     };
 
     return () => socket.close();
