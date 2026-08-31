@@ -28,21 +28,44 @@ class Simulation:
         }
 
     def set_order(self, amr_id: str, target_node: str) -> None:
-        """Route an AMR to target_node via the shortest path from its current node."""
+        """Queue a target for an AMR, or start it immediately if the AMR is idle."""
         amr = self.amrs[amr_id]
-        path = shortest_path(self.graph, amr.current_node, target_node)
-        amr.path = path[1:]
-        amr.progress = 0.0
+        if not amr.path and not amr.queued_targets:
+            path = shortest_path(self.graph, amr.current_node, target_node)
+            amr.path = path[1:]
+            amr.progress = 0.0
+            return
+
+        amr.enqueue_target(target_node)
 
     def step(self, dt: float) -> None:
         for amr in self.amrs.values():
+            amr.start_next_target_if_idle(self.graph)
             self._advance(amr, dt)
         self._update_collisions()
 
+    def _is_next_node_blocked(self, amr: AMR) -> bool:
+        if not amr.path:
+            return False
+
+        next_node = amr.path[0]
+        for other in self.amrs.values():
+            if other.id == amr.id:
+                continue
+            if other.current_node == next_node:
+                return True
+        return False
+
     def _advance(self, amr: AMR, dt: float) -> None:
+        if self._is_next_node_blocked(amr):
+            self._update_position(amr)
+            return
+
         remaining = self.speed * dt
         while remaining > 0 and amr.path:
             target_node = amr.path[0]
+            if self._is_next_node_blocked(amr):
+                break
             edge_length = self.graph.edges[amr.current_node, target_node]["weight"]
             remaining_on_edge = edge_length - amr.progress
             if remaining < remaining_on_edge:
@@ -90,6 +113,7 @@ class Simulation:
                 "position": {"x": amr.x, "y": amr.y},
                 "heading": amr.heading,
                 "path": list(amr.path),
+                "queued_targets": list(amr.queued_targets),
                 "colliding": amr.colliding,
             }
             for amr in self.amrs.values()
