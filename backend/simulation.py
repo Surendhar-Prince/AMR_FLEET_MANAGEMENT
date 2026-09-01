@@ -585,6 +585,43 @@ class Simulation:
                         amr.state_label = "YIELDING"
                         return True
 
+        # 5. Remote Shadow AMRs from peer laptops across the mesh
+        for r_id, r_amr in self.remote_amrs.items():
+            r_curr = r_amr.get("current_node")
+            r_path = r_amr.get("path", [])
+
+            # 5a. Remote robot is occupying next_node
+            if r_curr == next_node:
+                if len(amr.path) > 1:
+                    target = amr.path[-1]
+                    try:
+                        c_graph = self._build_congested_graph(amr.id)
+                        detour = astar_path(c_graph, amr.current_node, target, blocked_nodes={next_node}.union(failed_nodes))
+                        occupied_first = {a.current_node for a in self.amrs.values() if a.id != amr.id}
+                        occupied_first.update({r.get("current_node") for r in self.remote_amrs.values() if r.get("current_node")})
+                        if detour and len(detour) > 1 and detour[1] != next_node and detour[1] not in occupied_first:
+                            amr.path = detour[1:]
+                            amr.progress = 0.0
+                            amr.state_label = "TRANSIT"
+                            return False
+                    except (nx.NetworkXNoPath, nx.NodeNotFound):
+                        pass
+
+                amr.state_label = "YIELDING"
+                return True
+
+            # 5b. Head-on opposing edge with remote robot
+            if r_path and r_path[0] == amr.current_node and r_curr == next_node:
+                if amr.id > r_id:
+                    amr.state_label = "YIELDING"
+                    return True
+
+            # 5c. Remote robot converging on next_node from another edge
+            if r_path and r_path[0] == next_node and r_curr != amr.current_node:
+                if amr.id > r_id:
+                    amr.state_label = "YIELDING"
+                    return True
+
         if amr.state_label == "YIELDING":
             amr.state_label = "TRANSIT"
         return False
