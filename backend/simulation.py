@@ -419,6 +419,20 @@ class Simulation:
                     except Exception:
                         pass
 
+                # Proactive advance siding evacuation: if a remote AMR is delivering to our station, vacate in advance!
+                if not amr.path and not amr.queued_targets and amr.parasite and not amr.parasite.active_task_id:
+                    for r_amr in self.remote_amrs.values():
+                        r_path = r_amr.get("path", [])
+                        if r_path and (r_path[0] == amr.current_node or r_path[-1] == amr.current_node):
+                            evac_node = self.traffic_manager.find_evacuation_node(
+                                self.graph, amr.current_node, forbidden_nodes={r_amr.get("current_node", "")}
+                            )
+                            if evac_node:
+                                amr.path = [evac_node]
+                                amr.progress = 0.0
+                                amr.state_label = "TRANSIT"
+                                break
+
                 # Route standard CBBA task waypoints using dynamic congestion-weighted graph
                 if not amr.path and not amr.queued_targets:
                     # If mesh peers are active, allow a brief 0.6s consensus gossip convergence window
