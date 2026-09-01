@@ -392,6 +392,14 @@ class Simulation:
                             amr.path = []
                             amr.state_label = "IDLE"
 
+        # Dynamically sync AMR right-of-way priority from active delivery task
+        for amr in self.amrs.values():
+            if amr.parasite and amr.parasite.active_task_id:
+                active_t = self.tasks.get(amr.parasite.active_task_id)
+                amr.priority = active_t.priority if active_t else 1
+            else:
+                amr.priority = 1
+
         # 5. Route autonomous CBBA tasks with dynamic congestion avoidance
         for amr in self.amrs.values():
             if amr.parasite and amr.parasite.is_alive:
