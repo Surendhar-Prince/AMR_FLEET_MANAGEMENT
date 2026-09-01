@@ -1,6 +1,7 @@
 import json
 import socket
 import sys
+import uuid
 from typing import Protocol
 
 BEACON_PORT_DEFAULT = 9999
@@ -104,12 +105,12 @@ class UDPNetworkManager:
         broadcast_address: str = "255.255.255.255",
         fleet_prefix: str = "",
     ):
-        import uuid
-
         self.port = port
-        self.broadcast_address = broadcast_address
         self.fleet_prefix = fleet_prefix
         self.host_id = uuid.uuid4().hex[:8]
+
+        # Detect all local subnet broadcast addresses (e.g. 10.1.0.255, 192.168.1.255)
+        self.broadcast_targets = self._detect_broadcast_targets(broadcast_address)
 
         # Send socket
         self._send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -131,14 +132,32 @@ class UDPNetworkManager:
 
         self._running = True
 
+    def _detect_broadcast_targets(self, default_target: str) -> list[str]:
+        targets = [default_target, "<broadcast>", "255.255.255.255"]
+        try:
+            hostname = socket.gethostname()
+            for ip in socket.gethostbyname_ex(hostname)[2]:
+                parts = ip.split(".")
+                if len(parts) == 4 and not ip.startswith("127."):
+                    subnet_broadcast = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+                    if subnet_broadcast not in targets:
+                        targets.append(subnet_broadcast)
+        except Exception:
+            pass
+        return list(dict.fromkeys(targets))
+
     def broadcast_packet(self, packet: dict) -> None:
-        """Broadcast a JSON datagram to the UDP mesh."""
+        """Broadcast a JSON datagram to the UDP mesh across all network interfaces."""
         packet["sender_host"] = self.host_id
         packet["fleet_prefix"] = self.fleet_prefix
         try:
             payload = json.dumps(packet).encode("utf-8")
-            self._send_sock.sendto(payload, (self.broadcast_address, self.port))
-        except OSError:
+            for target in self.broadcast_targets:
+                try:
+                    self._send_sock.sendto(payload, (target, self.port))
+                except OSError:
+                    pass
+        except Exception:
             pass
 
     def broadcast_task_announce(self, task_dict: dict) -> None:
