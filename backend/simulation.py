@@ -403,16 +403,28 @@ class Simulation:
 
                 # Route standard CBBA task waypoints using dynamic congestion-weighted graph
                 if not amr.path and not amr.queued_targets:
-                    next_node = amr.parasite.get_next_waypoint(self.tasks, amr.current_node)
-                    if next_node and next_node != amr.current_node:
-                        try:
-                            c_graph = self._build_congested_graph(amr.id)
-                            path = astar_path(c_graph, amr.current_node, next_node, blocked_nodes=failed_nodes)
-                            amr.path = path[1:]
-                            amr.progress = 0.0
-                            amr.state_label = "TRANSIT"
-                        except (nx.NetworkXNoPath, nx.NodeNotFound):
-                            pass
+                    # If mesh peers are active, allow a brief 0.6s consensus gossip convergence window
+                    # so that if a peer laptop has a closer robot with a higher bid, it wins fairly!
+                    candidate_tid = amr.parasite.cbba.state.bundle[0] if amr.parasite.cbba.state.bundle else None
+                    candidate_task = self.tasks.get(candidate_tid) if candidate_tid else None
+                    in_consensus_sync = bool(
+                        candidate_task
+                        and self.remote_amrs
+                        and (time.time() - candidate_task.created_at) < 0.6
+                        and candidate_task.status == TaskStatus.UNASSIGNED
+                    )
+
+                    if not in_consensus_sync:
+                        next_node = amr.parasite.get_next_waypoint(self.tasks, amr.current_node)
+                        if next_node and next_node != amr.current_node:
+                            try:
+                                c_graph = self._build_congested_graph(amr.id)
+                                path = astar_path(c_graph, amr.current_node, next_node, blocked_nodes=failed_nodes)
+                                amr.path = path[1:]
+                                amr.progress = 0.0
+                                amr.state_label = "TRANSIT"
+                            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                                pass
             amr.start_next_target_if_idle(self.graph)
 
         # 6. Move AMRs with smooth sequence motion
