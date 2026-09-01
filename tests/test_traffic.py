@@ -84,3 +84,33 @@ def test_hop_by_hop_lookahead_holding_and_advance_evacuation(test_graph):
     assert sim.amrs["amr-4"].current_node == "siding"
     assert sim.amrs["amr-2"].current_node in ("n2", "n3")
 
+
+def test_car_following_same_edge_no_collision(test_graph):
+    """Verify that a trailing AMR maintains safe gap behind a leading AMR on the same edge without colliding."""
+    from backend.simulation import Simulation
+    sim = Simulation(
+        graph=test_graph,
+        amr_configs=[
+            {"id": "amr-1", "start_node": "n1"},
+            {"id": "amr-2", "start_node": "n1"},
+        ],
+        speed=1.0,
+        width=0.8,
+        length=1.2,
+    )
+    sim.amrs["amr-2"].progress = 2.0  # amr-2 is ahead
+    sim.amrs["amr-2"].path = ["n2"]
+    sim.amrs["amr-1"].progress = 0.0  # amr-1 is trailing
+    sim.amrs["amr-1"].path = ["n2"]
+    sim._update_position(sim.amrs["amr-1"])
+    sim._update_position(sim.amrs["amr-2"])
+
+    collisions = 0
+    for _ in range(40):
+        sim.step(0.1)
+        if sim.amrs["amr-1"].colliding or sim.amrs["amr-2"].colliding:
+            collisions += 1
+
+    assert collisions == 0, f"Collisions occurred during same-edge car following: {collisions}"
+
+

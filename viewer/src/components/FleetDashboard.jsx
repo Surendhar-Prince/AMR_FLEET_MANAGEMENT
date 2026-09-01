@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 
-export function FleetDashboard({ amrs }) {
+export function FleetDashboard({
+  amrs,
+  selectedNode,
+  onSelectNode,
+  theme = "light",
+  onToggleTheme,
+  onOpenMonitor,
+}) {
   const [activeTab, setActiveTab] = useState("activity"); // "activity" | "dispatch" | "cbba" | "network"
   const [langMode, setLangMode] = useState("human"); // "human" (NLP) | "machine" (UDP Code)
   const [mapNodes, setMapNodes] = useState([]);
@@ -18,36 +25,8 @@ export function FleetDashboard({ amrs }) {
       id: "init-1",
       timestamp: new Date().toLocaleTimeString(),
       type: "SYSTEM",
-      machine: "MESH_BOOT::ALL_NODES_ONLINE(count=4, port=9999)",
-      human: "Decentralized P2P Mesh online! 4 Parasite nodes active (amr-1, amr-2, amr-3, amr-4).",
-    },
-    {
-      id: "init-amr-1",
-      timestamp: new Date().toLocaleTimeString(),
-      type: "P2P",
-      machine: "UDP::PEER_READY(id=amr-1, start=n1, battery=100%)",
-      human: "amr-1: 'Parasite edge companion booted at Station n1. Ready for CBBA bidding.'",
-    },
-    {
-      id: "init-amr-2",
-      timestamp: new Date().toLocaleTimeString(),
-      type: "P2P",
-      machine: "UDP::PEER_READY(id=amr-2, start=n3, battery=100%)",
-      human: "amr-2: 'Parasite edge companion booted at Station n3. Ready for CBBA bidding.'",
-    },
-    {
-      id: "init-amr-3",
-      timestamp: new Date().toLocaleTimeString(),
-      type: "P2P",
-      machine: "UDP::PEER_READY(id=amr-3, start=n7, battery=100%)",
-      human: "amr-3: 'Parasite edge companion booted at Station n7. Ready for CBBA bidding.'",
-    },
-    {
-      id: "init-amr-4",
-      timestamp: new Date().toLocaleTimeString(),
-      type: "P2P",
-      machine: "UDP::PEER_READY(id=amr-4, start=n12, battery=100%)",
-      human: "amr-4: 'Parasite edge companion booted at Station n12. Ready for CBBA bidding.'",
+      machine: "MESH_BOOT::DECENTRALIZED_P2P_ONLINE(port=9999)",
+      human: "Decentralized P2P Mesh online! Listening on UDP Port 9999.",
     },
   ]);
 
@@ -396,32 +375,83 @@ export function FleetDashboard({ amrs }) {
       )}
 
       {/* Header */}
-      <div className="px-4 py-3.5 border-b border-slate-800 bg-slate-950/80 flex justify-between items-center">
+      <div className="px-4 py-3 border-b border-slate-800 bg-slate-950/90 flex justify-between items-center">
         <div className="flex items-center gap-2 font-bold text-sm tracking-wide text-slate-200">
           <span>🏭</span>
           <span>AMR FLEET CONTROL</span>
         </div>
         <div className="flex items-center gap-1.5">
+          {onToggleTheme && (
+            <button
+              onClick={onToggleTheme}
+              className="text-[10px] font-semibold px-2 py-1 rounded border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition-colors"
+              title="Toggle Light / Dark Map Theme"
+            >
+              {theme === "light" ? "🌙 Dark Map" : "☀️ Light Map"}
+            </button>
+          )}
+          <button
+            onClick={() => onOpenMonitor ? onOpenMonitor() : window.open("/monitor", "_blank", "width=1280,height=820")}
+            className="text-[10px] font-semibold px-2 py-1 rounded border border-cyan-700 bg-cyan-950 text-cyan-300 hover:bg-cyan-900 transition-colors flex items-center gap-1"
+            title="Open Dedicated Fullscreen Telemetry & P2P Monitor in new window"
+          >
+            <span>↗ Monitor</span>
+          </button>
           <button
             onClick={() => setLangMode(langMode === "human" ? "machine" : "human")}
             className="text-[10px] font-semibold px-2 py-1 rounded border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition-colors"
             title="Toggle between Natural Human Speech and Raw Machine UDP Code"
           >
-            {langMode === "human" ? "🗣️ NLP Speech" : "💻 Machine Code"}
+            {langMode === "human" ? "🗣️ NLP" : "💻 Code"}
           </button>
           <button
             onClick={() => setAutoSimActive(!autoSimActive)}
-            className={`text-[10px] font-semibold px-2.5 py-1 rounded border transition-colors ${
+            className={`text-[10px] font-semibold px-2 py-1 rounded border transition-colors ${
               autoSimActive
                 ? "bg-emerald-950 border-emerald-700 text-emerald-300 animate-pulse"
                 : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
             }`}
             title="Automatically generates warehouse traffic continuously"
           >
-            {autoSimActive ? "● Auto-Sim: ON" : "○ Auto-Sim: OFF"}
+            {autoSimActive ? "● Auto ON" : "○ Auto OFF"}
           </button>
         </div>
       </div>
+
+      {/* Interactive Map Node Quick Action Banner */}
+      {selectedNode && (
+        <div className="mx-3 mt-2.5 p-2 rounded-lg bg-pink-950/60 border border-pink-700 text-pink-200 flex items-center justify-between text-xs animate-in fade-in shadow-lg">
+          <div className="flex items-center gap-1.5 font-bold">
+            <span>📍 Dock [{selectedNode}] Selected</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setPickupNode(selectedNode);
+                setActiveTab("dispatch");
+              }}
+              className="px-2 py-0.5 rounded bg-pink-800 hover:bg-pink-700 text-[10px] font-bold text-white transition"
+            >
+              Set Pickup
+            </button>
+            <button
+              onClick={() => {
+                setDropoffNode(selectedNode);
+                setActiveTab("dispatch");
+              }}
+              className="px-2 py-0.5 rounded bg-pink-800 hover:bg-pink-700 text-[10px] font-bold text-white transition"
+            >
+              Set Dropoff
+            </button>
+            <button
+              onClick={() => onSelectNode && onSelectNode(null)}
+              className="px-1 text-slate-400 hover:text-white text-xs font-bold"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tab Navigation */}
       <div className="flex border-b border-slate-800 bg-slate-950/40 text-xs font-semibold text-slate-400">
@@ -707,49 +737,63 @@ export function FleetDashboard({ amrs }) {
                   No tasks in pool. Dispatch a task to see bidding.
                 </div>
               ) : (
-                <table className="w-full text-left text-[11px] border-collapse">
-                  <thead className="bg-slate-900/90 text-slate-400 sticky top-0">
+                <table className="w-full text-left text-[11px] border-collapse font-mono">
+                  <thead className="bg-slate-900/90 text-slate-400 sticky top-0 font-sans">
                     <tr>
                       <th className="py-1.5 px-2 font-semibold">Task</th>
-                      <th className="py-1.5 px-1 text-center font-semibold">amr-1</th>
-                      <th className="py-1.5 px-1 text-center font-semibold">amr-2</th>
-                      <th className="py-1.5 px-1 text-center font-semibold">amr-3</th>
-                      <th className="py-1.5 px-1 text-center font-semibold">amr-4</th>
+                      {(amrs && amrs.length > 0 ? amrs : [{ id: "amr-1" }, { id: "amr-2" }]).map((a) => (
+                        <th key={a.id} className="py-1.5 px-1 text-center font-semibold text-cyan-300">
+                          {a.id}
+                        </th>
+                      ))}
                       <th className="py-1.5 px-1.5 font-semibold">Winner</th>
                       <th className="py-1.5 px-2 font-semibold">Travel Path</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
-                    {(cbbaData?.bid_matrix || []).slice(-8).reverse().map((row) => (
-                      <tr key={row.task_id} className="hover:bg-slate-900/40">
-                        <td className="py-1.5 px-2 font-mono font-medium text-slate-300">
-                          {row.task_id}
-                          <div className="text-[9px] text-slate-500">{row.pickup}➔{row.dropoff}</div>
-                        </td>
-                        {["amr-1", "amr-2", "amr-3", "amr-4"].map((aid) => {
-                          const bid = row.bids[aid] || 0.0;
-                          const isWinner = row.assigned_to === aid;
-                          return (
-                            <td
-                              key={aid}
-                              className={`py-1.5 px-1 text-center ${
-                                isWinner
-                                  ? "text-emerald-400 font-bold bg-emerald-950/30"
-                                  : "text-slate-400"
-                              }`}
-                            >
-                              {bid.toFixed(1)}
-                            </td>
-                          );
-                        })}
-                        <td className="py-1.5 px-1.5 font-semibold text-sky-400">
-                          {row.assigned_to || "Bidding"}
-                        </td>
-                        <td className="py-1.5 px-2 font-mono text-[10px] text-emerald-400 font-semibold whitespace-nowrap">
-                          {row.planned_route ? row.planned_route.join(" ➔ ") : `${row.pickup} ➔ ${row.dropoff}`}
-                        </td>
-                      </tr>
-                    ))}
+                    {(cbbaData?.bid_matrix || []).slice(-8).reverse().map((row) => {
+                      const activeAmrList = amrs && amrs.length > 0 ? amrs : [{ id: "amr-1" }, { id: "amr-2" }];
+                      return (
+                        <tr key={row.task_id} className="hover:bg-slate-900/40">
+                          <td className="py-1.5 px-2 font-mono font-medium text-slate-300">
+                            {row.task_id}
+                            <div className="text-[9px] text-slate-500">
+                              {row.pickup || row.pickup_node}➔{row.dropoff || row.dropoff_node}
+                            </div>
+                          </td>
+                          {activeAmrList.map((a) => {
+                            const aid = a.id;
+                            const shortId = aid.replace(/^[a-z]+-/, "");
+                            const bid = row.bids?.[aid] ?? row.bids?.[shortId] ?? 0.0;
+                            const isWinner =
+                              row.assigned_to === aid ||
+                              row.assigned_to === shortId ||
+                              row.winner === aid ||
+                              row.winner === shortId;
+                            return (
+                              <td
+                                key={aid}
+                                className={`py-1.5 px-1 text-center ${
+                                  isWinner
+                                    ? "text-emerald-400 font-bold bg-emerald-950/40 border border-emerald-800/50 rounded"
+                                    : "text-slate-400"
+                                }`}
+                              >
+                                {bid > 0 ? bid.toFixed(1) : "—"}
+                              </td>
+                            );
+                          })}
+                          <td className="py-1.5 px-1.5 font-semibold text-sky-400">
+                            {row.assigned_to || row.winner || "Bidding"}
+                          </td>
+                          <td className="py-1.5 px-2 font-mono text-[10px] text-emerald-400 font-semibold whitespace-nowrap">
+                            {row.planned_route
+                              ? row.planned_route.join(" ➔ ")
+                              : `${row.pickup || row.pickup_node} ➔ ${row.dropoff || row.dropoff_node}`}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

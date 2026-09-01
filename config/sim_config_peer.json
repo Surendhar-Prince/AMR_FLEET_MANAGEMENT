@@ -1,15 +1,15 @@
 {
   "map": "maps/complex_map.json",
-  "port": 8000,
-  "tick_hz": 20,
+  "port": 8001,
+  "tick_hz": 10,
   "amr_speed": 1.0,
   "amr_width": 0.8,
   "amr_length": 1.2,
   "beacon_port": 9999,
   "beacon_interval_s": 1.0,
-  "fleet_prefix": "alpha",
+  "fleet_prefix": "beta",
   "p2p_mesh_enabled": true,
   "amrs": [
-    {"id": "amr-1", "start_node": "n1"}
+    { "id": "amr-1", "start_node": "n7", "battery": 100 }
   ]
 }

@@ -27,7 +27,9 @@ class Simulation:
         self.length = length
         self.traffic_manager = TrafficManager(ttl_buffer_seconds=2.0)
         self.tasks: dict[str, Task] = {}
+        self.remote_amrs: dict[str, dict] = {}
         self.network_packets_count = 0
+        self.network_manager = None
         self.last_p2p_events: list[dict] = []
         self.p2p_conversations: list[dict] = []
 
@@ -47,8 +49,9 @@ class Simulation:
         pickup_node: str,
         dropoff_node: str,
         priority: int = 1,
+        broadcast: bool = True,
     ) -> Task:
-        """Add a warehouse task to the decentralized task pool."""
+        """Add a warehouse task to the decentralized task pool and broadcast over UDP."""
         if pickup_node not in self.graph.nodes:
             raise ValueError(f"Unknown pickup node: {pickup_node}")
         if dropoff_node not in self.graph.nodes:
@@ -62,6 +65,10 @@ class Simulation:
             status=TaskStatus.UNASSIGNED,
         )
         self.tasks[task_id] = task
+
+        if broadcast and self.network_manager:
+            self.network_manager.broadcast_task_announce(task.to_dict())
+
         return task
 
     def set_order(self, amr_id: str, target_node: str) -> None:
@@ -199,6 +206,87 @@ class Simulation:
             },
         }
 
+    def handle_network_packet(self, packet: dict) -> None:
+        """Process incoming UDP network packets from peer laptops across the mesh."""
+        self.network_packets_count += 1
+        p_type = packet.get("type")
+
+        # 1. New task announced by peer laptop
+        if p_type == "TASK_ANNOUNCE":
+            task_dict = packet.get("task", {})
+            tid = task_dict.get("id")
+            if tid and tid not in self.tasks:
+                self.tasks[tid] = Task.from_dict(task_dict)
+
+        # 2. CBBA Consensus Gossip received from peer AMR
+        elif p_type == "CBBA_GOSSIP":
+            agent_id = packet.get("agent_id")
+            consensus_dict = packet.get("consensus", {})
+            if agent_id and consensus_dict:
+                from backend.cbba.models import ConsensusState
+                peer_state = ConsensusState.from_dict(consensus_dict)
+                for amr in self.amrs.values():
+                    if amr.parasite and amr.parasite.is_alive and amr.id != agent_id:
+                        amr.parasite.receive_peer_consensus(peer_state, self.tasks)
+
+        # 3. Real-time AMR Position Beacon received from peer laptop
+        elif p_type == "AMR_BEACON":
+            amr_dict = packet.get("amr", {})
+            remote_id = amr_dict.get("id")
+            if remote_id and remote_id not in self.amrs:
+                prev = self.remote_amrs.get(remote_id)
+                self.remote_amrs[remote_id] = amr_dict
+                cur_node = amr_dict.get("current_node", "?")
+                st = amr_dict.get("state_label", "IDLE")
+                if not prev or prev.get("state_label") != st or prev.get("current_node") != cur_node:
+                    msg = f"📡 {remote_id}: 'Operating at Station {cur_node} [{st}]. Mesh coordinates synchronized.'"
+                    if msg not in self.p2p_conversations:
+                        self.p2p_conversations.append(msg)
+                        if len(self.p2p_conversations) > 20:
+                            self.p2p_conversations.pop(0)
+
+        # 4. Task status update broadcast (e.g. peer completed a delivery)
+        elif p_type == "TASK_STATUS":
+            tid = packet.get("task_id")
+            status = packet.get("status")
+            assigned_to = packet.get("assigned_to")
+            if tid in self.tasks and status:
+                self.tasks[tid].status = TaskStatus(status)
+                if assigned_to:
+                    self.tasks[tid].assigned_to = assigned_to
+
+    def _build_congested_graph(self, for_amr_id: str) -> nx.DiGraph:
+        """Create a graph with dynamic weight penalties on nodes occupied or contested by local and remote AMRs."""
+        congested = self.graph.copy()
+        # Local AMRs
+        for amr in self.amrs.values():
+            if amr.id != for_amr_id and amr.state_label != "FAILED":
+                occupied = [amr.current_node]
+                if amr.path:
+                    occupied.append(amr.path[0])
+                for node in occupied:
+                    if node in congested:
+                        for u, v, d in congested.in_edges(node, data=True):
+                            d["weight"] = d.get("weight", 1.0) + 25.0
+                        for u, v, d in congested.out_edges(node, data=True):
+                            d["weight"] = d.get("weight", 1.0) + 25.0
+
+        # Remote Shadow AMRs from peer laptops
+        for r_amr in self.remote_amrs.values():
+            r_node = r_amr.get("current_node")
+            r_path = r_amr.get("path", [])
+            occupied = [r_node] if r_node else []
+            if r_path:
+                occupied.append(r_path[0])
+            for node in occupied:
+                if node in congested:
+                    for u, v, d in congested.in_edges(node, data=True):
+                        d["weight"] = d.get("weight", 1.0) + 25.0
+                    for u, v, d in congested.out_edges(node, data=True):
+                        d["weight"] = d.get("weight", 1.0) + 25.0
+
+        return congested
+
     def step(self, dt: float) -> None:
         """Main simulation tick."""
         # 1. Update heartbeats and purge stale ghost path leases
@@ -257,7 +345,6 @@ class Simulation:
             if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
                 continue
 
-            # Find the true highest bidder across all alive nodes
             best_bidder = None
             highest_bid = 0.0
             for amr in amr_list:
@@ -273,7 +360,6 @@ class Simulation:
                 if task.status == TaskStatus.UNASSIGNED:
                     task.status = TaskStatus.ASSIGNED
 
-                # Enforce global consensus on all nodes: non-winners MUST drop this task immediately
                 for amr in amr_list:
                     if amr.id != best_bidder and amr.parasite:
                         if task_id in amr.parasite.cbba.state.bundle:
@@ -288,7 +374,7 @@ class Simulation:
                             amr.path = []
                             amr.state_label = "IDLE"
 
-        # 5. Route autonomous CBBA tasks or return to charge bay when battery is low
+        # 5. Route autonomous CBBA tasks with dynamic congestion avoidance
         for amr in self.amrs.values():
             if amr.parasite and amr.parasite.is_alive:
                 # Recharging logic at charging dock (Station n14)
@@ -315,12 +401,13 @@ class Simulation:
                     except Exception:
                         pass
 
-                # Route standard CBBA task waypoints avoiding failed nodes
+                # Route standard CBBA task waypoints using dynamic congestion-weighted graph
                 if not amr.path and not amr.queued_targets:
                     next_node = amr.parasite.get_next_waypoint(self.tasks, amr.current_node)
                     if next_node and next_node != amr.current_node:
                         try:
-                            path = astar_path(self.graph, amr.current_node, next_node, blocked_nodes=failed_nodes)
+                            c_graph = self._build_congested_graph(amr.id)
+                            path = astar_path(c_graph, amr.current_node, next_node, blocked_nodes=failed_nodes)
                             amr.path = path[1:]
                             amr.progress = 0.0
                             amr.state_label = "TRANSIT"
@@ -340,7 +427,8 @@ class Simulation:
     def _resolve_traffic_conflict(self, amr: AMR) -> bool:
         """Check if upcoming node/corridor is occupied or contested.
 
-        Executes dynamic evacuation and car-following so robots advance smoothly.
+        Executes dynamic in-flight detour calculation, car-following, intersection clearance holding,
+        advance evacuation, and P2P right-of-way resolution to prevent collisions and looping.
 
         Returns:
             True if AMR must wait / yield at current position, False if clear to advance.
@@ -349,17 +437,22 @@ class Simulation:
             return False
 
         next_node = amr.path[0]
-        blocker: Optional[AMR] = None
+        safe_gap = max(self.length * 1.5, 1.5)
+        safe_node_clearance = max(self.length * 1.2, 1.2)
+        failed_nodes = {
+            a.current_node
+            for a in self.amrs.values()
+            if a.state_label == "FAILED" or (a.parasite and not a.parasite.is_alive)
+        }
 
         for other in self.amrs.values():
             if other.id == amr.id:
                 continue
 
-            # Case: Other robot is FAILED (dead hardware obstacle on track)
+            # 1. Other robot is FAILED (hardware obstacle)
             if other.state_label == "FAILED" or (other.parasite and not other.parasite.is_alive):
                 if other.current_node == next_node:
-                    # Upcoming node is blocked by disabled AMR! Attempt dynamic A* detour around it
-                    if amr.path:
+                    if amr.path and len(amr.path) > 1:
                         target = amr.path[-1]
                         detour = self.traffic_manager.calculate_detour(
                             self.graph, amr.current_node, target, blocked_nodes={other.current_node}
@@ -369,75 +462,132 @@ class Simulation:
                             amr.progress = 0.0
                             amr.state_label = "TRANSIT"
                             return False
-
-                    # If no detour exists or target is the blocked dock itself, hold safely at preceding node!
                     amr.state_label = "YIELDING"
                     return True
                 continue
 
-            is_occupying_target = (other.current_node == next_node)
-            is_opposing_edge = (other.current_node == next_node and other.path and other.path[0] == amr.current_node)
-            is_competing_target = (other.path and other.path[0] == next_node)
+            # 2. Car-Following on the SAME EDGE (Same current_node and same next_node)
+            if other.current_node == amr.current_node and other.path and other.path[0] == next_node:
+                if other.progress > amr.progress:
+                    # 'other' is in front of 'amr'. AMR must maintain safe following gap!
+                    if (other.progress - amr.progress) < safe_gap:
+                        amr.state_label = "YIELDING"
+                        return True
+                # If amr is in front of other, amr has right of way to advance
+                continue
 
-            if is_occupying_target or is_opposing_edge or is_competing_target:
-                blocker = other
-                break
+            # 3. Blocker is at next_node
+            if other.current_node == next_node:
+                # 3a. Head-on opposing edge (other is at next_node and wants to enter amr.current_node)
+                is_opposing = bool(other.path and other.path[0] == amr.current_node)
+                if is_opposing:
+                    winner_id, yielder_id = self.traffic_manager.resolve_head_on(amr, other, self.graph)
+                    if amr.id == yielder_id:
+                        # Try dynamic alternate detour avoiding the contested head-on corridor
+                        if len(amr.path) > 1:
+                            target = amr.path[-1]
+                            try:
+                                c_graph = self._build_congested_graph(amr.id)
+                                detour = astar_path(c_graph, amr.current_node, target, blocked_nodes={next_node}.union(failed_nodes))
+                                occupied_first_nodes = {a.current_node for a in self.amrs.values() if a.id != amr.id}
+                                if detour and len(detour) > 1 and detour[1] != next_node and detour[1] not in occupied_first_nodes:
+                                    amr.path = detour[1:]
+                                    amr.progress = 0.0
+                                    amr.state_label = "TRANSIT"
+                                    return False
+                            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                                pass
 
-        if not blocker:
-            if amr.state_label == "YIELDING":
-                amr.state_label = "TRANSIT"
-            return False
+                        amr.state_label = "YIELDING"
+                        return True
+                    else:
+                        # Winner waits until yielder clears or steps aside
+                        amr.state_label = "YIELDING"
+                        return True
 
-        # If blocker is an idle AMR at next_node, trigger advance evacuation
-        if blocker.current_node == next_node and (not blocker.path or blocker.state_label in ("IDLE", "YIELDING")):
-            preferred_forbidden = {amr.current_node}
-            if amr.path and len(amr.path) > 1:
-                preferred_forbidden.add(amr.path[1])
+                # 3b. Blocker is vacating along a different edge
+                if other.path and other.path[0] != amr.current_node:
+                    # Must wait until other has physically cleared next_node by safe distance
+                    if other.progress < safe_node_clearance:
+                        amr.state_label = "YIELDING"
+                        return True
+                    # Other cleared the intersection, amr may proceed
+                    continue
 
-            evac_node = self.traffic_manager.find_evacuation_node(
-                self.graph, blocker.current_node, forbidden_nodes=preferred_forbidden
-            )
-            if not evac_node:
-                evac_node = self.traffic_manager.find_evacuation_node(
-                    self.graph, blocker.current_node, forbidden_nodes={amr.current_node}
-                )
+                # 3c. Blocker is stationary/idle at next_node
+                if not other.path or other.state_label in ("IDLE", "YIELDING"):
+                    # If other is idle with no active task, trigger advance evacuation
+                    if other.parasite and not other.parasite.active_task_id:
+                        preferred_forbidden = {amr.current_node}
+                        if len(amr.path) > 1:
+                            preferred_forbidden.add(amr.path[1])
+                        evac_node = self.traffic_manager.find_evacuation_node(
+                            self.graph, other.current_node, forbidden_nodes=preferred_forbidden
+                        )
+                        if not evac_node:
+                            evac_node = self.traffic_manager.find_evacuation_node(
+                                self.graph, other.current_node, forbidden_nodes={amr.current_node}
+                            )
+                        if evac_node and not other.path:
+                            other.path = [evac_node]
+                            other.progress = 0.0
+                            other.state_label = "YIELDING"
 
-            if evac_node:
-                blocker.path = [evac_node]
-                blocker.progress = 0.0
-                blocker.state_label = "YIELDING"
+                    # If other is busy or cannot evacuate, try alternate detour
+                    if (not other.parasite or other.parasite.active_task_id) and len(amr.path) > 1:
+                        target = amr.path[-1]
+                        try:
+                            c_graph = self._build_congested_graph(amr.id)
+                            detour = astar_path(c_graph, amr.current_node, target, blocked_nodes={next_node}.union(failed_nodes))
+                            occupied_first_nodes = {a.current_node for a in self.amrs.values() if a.id != amr.id}
+                            if detour and len(detour) > 1 and detour[1] != next_node and detour[1] not in occupied_first_nodes:
+                                amr.path = detour[1:]
+                                amr.progress = 0.0
+                                amr.state_label = "TRANSIT"
+                                return False
+                        except (nx.NetworkXNoPath, nx.NodeNotFound):
+                            pass
 
-        # Execute P2P Dialogue Negotiation
-        if amr.parasite and blocker.parasite:
-            p2p_dialogue = amr.parasite.negotiate_p2p_traffic(blocker.parasite, amr, blocker, self.graph)
-            self.network_packets_count += 2
-            if not any(d.get("corridor") == p2p_dialogue["corridor"] and d.get("winner") == p2p_dialogue["winner"] for d in self.p2p_conversations[-3:]):
-                self.p2p_conversations.append(p2p_dialogue)
-                self.p2p_conversations = self.p2p_conversations[-20:]
+                    amr.state_label = "YIELDING"
+                    return True
 
-        winner_id, yielder_id = self.traffic_manager.resolve_head_on(amr, blocker, self.graph)
+            # 4. Competing for next_node from DIFFERENT incoming edges (Intersection convergence)
+            if other.path and other.path[0] == next_node and other.current_node != amr.current_node:
+                # Try dynamic alternate detour around congested intersection
+                if len(amr.path) > 1:
+                    target = amr.path[-1]
+                    try:
+                        c_graph = self._build_congested_graph(amr.id)
+                        detour = astar_path(c_graph, amr.current_node, target, blocked_nodes={next_node}.union(failed_nodes))
+                        if detour and len(detour) > 1 and detour[1] != next_node:
+                            amr.path = detour[1:]
+                            amr.progress = 0.0
+                            amr.state_label = "TRANSIT"
+                            return False
+                    except (nx.NetworkXNoPath, nx.NodeNotFound):
+                        pass
 
-        if amr.id == yielder_id:
-            # We are the yielder! Hold safely at current node until the winner clears the intersection
-            amr.state_label = "YIELDING"
-            return True
-        else:
-            # We are the WINNER (Right-of-Way)!
-            # If blocker is at next_node and is vacating / moving away:
-            if blocker.current_node == next_node:
-                if blocker.path and blocker.path[0] != amr.current_node:
-                    # Blocker is vacating! Winner starts advancing smoothly along edge!
-                    if amr.state_label == "YIELDING":
-                        amr.state_label = "TRANSIT"
-                    return False
+                edge_len_amr = self.graph.edges[amr.current_node, next_node]["weight"]
+                rem_amr = max(0.0, edge_len_amr - amr.progress)
 
-                # If blocker is still completely stationary and hasn't received an evac path yet, hold
-                amr.state_label = "YIELDING"
-                return True
+                edge_len_other = self.graph.edges[other.current_node, next_node]["weight"]
+                rem_other = max(0.0, edge_len_other - other.progress)
 
-            if amr.state_label == "YIELDING":
-                amr.state_label = "TRANSIT"
-            return False
+                if rem_amr > rem_other + 0.1:
+                    if rem_amr < safe_gap:
+                        amr.state_label = "YIELDING"
+                        return True
+                elif rem_other > rem_amr + 0.1:
+                    pass
+                else:
+                    winner_id, yielder_id = self.traffic_manager.resolve_head_on(amr, other, self.graph)
+                    if amr.id == yielder_id and rem_amr < safe_gap:
+                        amr.state_label = "YIELDING"
+                        return True
+
+        if amr.state_label == "YIELDING":
+            amr.state_label = "TRANSIT"
+        return False
 
     def _advance(self, amr: AMR, dt: float) -> None:
         if self._resolve_traffic_conflict(amr):
@@ -456,6 +606,30 @@ class Simulation:
                 break
             edge_length = self.graph.edges[amr.current_node, target_node]["weight"]
             remaining_on_edge = edge_length - amr.progress
+            step_move = min(remaining, remaining_on_edge)
+
+            # Spatial lookahead check: Verify candidate next position does not collide with any active AMR
+            from_n = self.graph.nodes[amr.current_node]
+            to_n = self.graph.nodes[target_node]
+            cand_prog = amr.progress + step_move
+            fraction = cand_prog / edge_length if edge_length else 0.0
+            cand_x = from_n["x"] + (to_n["x"] - from_n["x"]) * fraction
+            cand_y = from_n["y"] + (to_n["y"] - from_n["y"]) * fraction
+            cand_heading = math.atan2(to_n["y"] - from_n["y"], to_n["x"] - from_n["x"])
+            cand_rect = (cand_x, cand_y, cand_heading, self.width, self.length)
+
+            collision_imminent = False
+            for other in self.amrs.values():
+                if other.id != amr.id and other.state_label != "FAILED":
+                    other_rect = (other.x, other.y, other.heading, self.width, self.length)
+                    if rectangles_overlap(cand_rect, other_rect):
+                        collision_imminent = True
+                        break
+
+            if collision_imminent:
+                amr.state_label = "YIELDING"
+                break
+
             if remaining < remaining_on_edge:
                 amr.progress += remaining
                 distance_moved += remaining
@@ -503,7 +677,7 @@ class Simulation:
                     b.colliding = True
 
     def snapshot(self) -> list[dict]:
-        return [
+        local_snapshots = [
             {
                 "id": amr.id,
                 "current_node": amr.current_node,
@@ -516,6 +690,25 @@ class Simulation:
                 "battery_soc": amr.parasite.battery_soc if amr.parasite else 100.0,
                 "active_task": amr.parasite.active_task_id if amr.parasite else None,
                 "bundle": amr.parasite.cbba.state.bundle if amr.parasite else [],
+                "is_remote": False,
             }
             for amr in self.amrs.values()
         ]
+        remote_snapshots = [
+            {
+                "id": r_amr.get("id"),
+                "current_node": r_amr.get("current_node"),
+                "position": r_amr.get("position", {"x": 0.0, "y": 0.0}),
+                "heading": r_amr.get("heading", 0.0),
+                "path": r_amr.get("path", []),
+                "queued_targets": [],
+                "colliding": False,
+                "state_label": r_amr.get("state_label", "IDLE"),
+                "battery_soc": r_amr.get("battery_soc", 100.0),
+                "active_task": r_amr.get("active_task"),
+                "bundle": [],
+                "is_remote": True,
+            }
+            for r_amr in self.remote_amrs.values()
+        ]
+        return local_snapshots + remote_snapshots

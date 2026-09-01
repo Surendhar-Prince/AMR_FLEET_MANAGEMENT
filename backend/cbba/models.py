@@ -36,6 +36,19 @@ class Task:
             "completed_at": self.completed_at,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        return cls(
+            id=data["id"],
+            pickup_node=data["pickup_node"],
+            dropoff_node=data["dropoff_node"],
+            priority=data.get("priority", 1),
+            status=TaskStatus(data.get("status", "UNASSIGNED")),
+            assigned_to=data.get("assigned_to"),
+            created_at=data.get("created_at", time.time()),
+            completed_at=data.get("completed_at"),
+        )
+
 
 @dataclass
 class Bid:
@@ -63,3 +76,14 @@ class ConsensusState:
             "winning_agents": dict(self.winning_agents),
             "timestamp_matrix": dict(self.timestamp_matrix),
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ConsensusState":
+        return cls(
+            agent_id=data["agent_id"],
+            bundle=list(data.get("bundle", [])),
+            path=list(data.get("path", [])),
+            winning_bids=dict(data.get("winning_bids", {})),
+            winning_agents=dict(data.get("winning_agents", {})),
+            timestamp_matrix=dict(data.get("timestamp_matrix", {})),
+        )

@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend.beacon import BeaconPublisher, publish_snapshot
+from backend.beacon import BeaconPublisher, UDPNetworkManager, publish_snapshot
 from backend.config import Config
 from backend.map import load_map
 from backend.simulation import Simulation
@@ -30,7 +30,7 @@ class TaskCreateRequest(BaseModel):
 
 
 def build_app(config: Config) -> FastAPI:
-    """Build the FastAPI app: REST endpoints, WebSocket broadcast, tick loop."""
+    """Build the FastAPI app: REST endpoints, WebSocket broadcast, tick loop, and P2P UDP mesh."""
     graph = load_map(config.map)
     simulation = Simulation(
         graph=graph,
@@ -41,6 +41,14 @@ def build_app(config: Config) -> FastAPI:
     )
     dt = 1.0 / config.tick_hz
     beacon_publisher = BeaconPublisher(port=config.beacon_port)
+
+    # Initialize Decentralized P2P UDP Mesh Manager
+    network_manager: Optional[UDPNetworkManager] = None
+    if getattr(config, "p2p_mesh_enabled", True):
+        network_manager = UDPNetworkManager(
+            port=config.beacon_port, fleet_prefix=getattr(config, "fleet_prefix", "")
+        )
+        simulation.network_manager = network_manager
 
     async def tick_loop() -> None:
         while True:
@@ -57,12 +65,29 @@ def build_app(config: Config) -> FastAPI:
     async def lifespan(app: FastAPI):
         tick_task = asyncio.create_task(tick_loop())
         beacon_task = asyncio.create_task(beacon_loop())
+        listener_task = None
+        gossip_task = None
+
+        if network_manager:
+            listener_task = asyncio.create_task(
+                network_manager.listen_loop(simulation.handle_network_packet)
+            )
+            gossip_task = asyncio.create_task(
+                network_manager.round_robin_gossip_loop(simulation, tick_interval=dt)
+            )
+
         try:
             yield
         finally:
             tick_task.cancel()
             beacon_task.cancel()
+            if listener_task:
+                listener_task.cancel()
+            if gossip_task:
+                gossip_task.cancel()
             beacon_publisher.close()
+            if network_manager:
+                network_manager.close()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -170,6 +195,14 @@ def build_app(config: Config) -> FastAPI:
             pass
 
     if os.path.isdir(VIEWER_DIST_DIR):
+        from fastapi.responses import FileResponse
+
+        index_file = os.path.join(VIEWER_DIST_DIR, "index.html")
+
+        @app.get("/monitor")
+        def serve_monitor():
+            return FileResponse(index_file)
+
         app.mount("/", StaticFiles(directory=VIEWER_DIST_DIR, html=True), name="viewer")
     else:
         print(

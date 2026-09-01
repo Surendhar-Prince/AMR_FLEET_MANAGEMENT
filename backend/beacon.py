@@ -89,3 +89,150 @@ class BeaconListener:
 
     def close(self) -> None:
         self._sock.close()
+
+
+class UDPNetworkManager:
+    """Decentralized Multi-Laptop UDP Mesh Network Manager.
+
+    Handles real-time P2P message transmission, incoming packet dispatch,
+    and Round-Robin Time-Division Gossip sequencing to eliminate network lag.
+    """
+
+    def __init__(
+        self,
+        port: int = BEACON_PORT_DEFAULT,
+        broadcast_address: str = "255.255.255.255",
+        fleet_prefix: str = "",
+    ):
+        import uuid
+
+        self.port = port
+        self.broadcast_address = broadcast_address
+        self.fleet_prefix = fleet_prefix
+        self.host_id = uuid.uuid4().hex[:8]
+
+        # Send socket
+        self._send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self._send_sock.settimeout(0.5)
+
+        # Receive socket
+        self._recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            try:
+                self._recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except Exception:
+                pass
+        try:
+            self._recv_sock.bind(("", port))
+        except OSError:
+            pass  # If port is already bound on some platforms, continue gracefully
+
+        self._running = True
+
+    def broadcast_packet(self, packet: dict) -> None:
+        """Broadcast a JSON datagram to the UDP mesh."""
+        packet["sender_host"] = self.host_id
+        packet["fleet_prefix"] = self.fleet_prefix
+        try:
+            payload = json.dumps(packet).encode("utf-8")
+            self._send_sock.sendto(payload, (self.broadcast_address, self.port))
+        except OSError:
+            pass
+
+    def broadcast_task_announce(self, task_dict: dict) -> None:
+        """Broadcast a new warehouse task announcement across all laptops."""
+        self.broadcast_packet({"type": "TASK_ANNOUNCE", "task": task_dict})
+
+    def broadcast_cbba_gossip(self, agent_id: str, consensus_dict: dict) -> None:
+        """Broadcast CBBA consensus bidding state for an AMR."""
+        self.broadcast_packet(
+            {"type": "CBBA_GOSSIP", "agent_id": agent_id, "consensus": consensus_dict}
+        )
+
+    def broadcast_amr_beacon(self, amr_snapshot: dict) -> None:
+        """Broadcast real-time AMR coordinates and status beacon."""
+        self.broadcast_packet({"type": "AMR_BEACON", "amr": amr_snapshot})
+
+    def broadcast_task_status(self, task_id: str, status: str, assigned_to: str) -> None:
+        """Broadcast task lifecycle transition (e.g. IN_PROGRESS, COMPLETED)."""
+        self.broadcast_packet(
+            {
+                "type": "TASK_STATUS",
+                "task_id": task_id,
+                "status": status,
+                "assigned_to": assigned_to,
+            }
+        )
+
+    async def listen_loop(self, on_packet_received) -> None:
+        """Asynchronously listen for incoming UDP packets and dispatch them."""
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        while self._running:
+            try:
+                # Use run_in_executor to avoid blocking the event loop on recvfrom
+                payload, _addr = await loop.run_in_executor(
+                    None, self._blocking_recv
+                )
+                if payload:
+                    packet = json.loads(payload.decode("utf-8"))
+                    # Filter out packets broadcast by our own host
+                    if packet.get("sender_host") != self.host_id:
+                        on_packet_received(packet)
+            except Exception:
+                await asyncio.sleep(0.01)
+
+    def _blocking_recv(self) -> bytes | None:
+        self._recv_sock.settimeout(0.5)
+        try:
+            payload, _ = self._recv_sock.recvfrom(4096)
+            return payload
+        except (socket.timeout, OSError):
+            return None
+
+    async def round_robin_gossip_loop(self, simulation, tick_interval: float = 0.05) -> None:
+        """Execute Round-Robin Time-Division Gossip broadcasting.
+
+        Cycles through local AMRs one-by-one so only 1 AMR broadcasts per time slot,
+        preventing packet storms, socket congestion, and lag.
+        """
+        import asyncio
+
+        amr_keys = list(simulation.amrs.keys())
+        idx = 0
+        while self._running:
+            if amr_keys:
+                amr_id = amr_keys[idx % len(amr_keys)]
+                idx += 1
+                amr = simulation.amrs.get(amr_id)
+                if amr:
+                    # 1. Broadcast AMR Beacon
+                    beacon_data = {
+                        "id": amr.id,
+                        "current_node": amr.current_node,
+                        "position": {"x": amr.x, "y": amr.y},
+                        "heading": amr.heading,
+                        "path": list(amr.path),
+                        "state_label": amr.state_label,
+                        "battery_soc": amr.parasite.battery_soc if amr.parasite else 100.0,
+                        "active_task": amr.parasite.active_task_id if amr.parasite else None,
+                    }
+                    self.broadcast_amr_beacon(beacon_data)
+
+                    # 2. Broadcast CBBA Gossip state if companion is active
+                    if amr.parasite and amr.parasite.is_alive:
+                        self.broadcast_cbba_gossip(amr.id, amr.parasite.cbba.state.to_dict())
+
+            await asyncio.sleep(tick_interval)
+
+    def close(self) -> None:
+        self._running = False
+        try:
+            self._send_sock.close()
+            self._recv_sock.close()
+        except Exception:
+            pass
+

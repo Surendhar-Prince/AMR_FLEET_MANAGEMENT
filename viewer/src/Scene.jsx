@@ -84,7 +84,7 @@ function AmrTrajectoryLine({ amr, nodeById }) {
   );
 }
 
-function MapGeometry({ map, amrs }) {
+function MapGeometry({ map, amrs, selectedNode, onSelectNode, theme = "light" }) {
   const nodeById = useMemo(
     () => new Map(map.nodes.map((n) => [n.id, n])),
     [map.nodes]
@@ -117,6 +117,8 @@ function MapGeometry({ map, amrs }) {
     return s;
   }, [amrs]);
 
+  const isLight = theme === "light";
+
   return (
     <group>
       {/* Station Nodes */}
@@ -124,83 +126,126 @@ function MapGeometry({ map, amrs }) {
         const isFailed = failedNodes.has(node.id);
         const isOccupied = occupiedNodes.has(node.id);
         const isReserved = reservedNodes.has(node.id);
+        const isSelected = selectedNode === node.id;
+        const isChargingDock = node.id === "n14";
 
-        // Failed node is Red, Active path node is Green, Occupied is Orange, Normal is Grey
+        // Dynamic node color coding
         const circleColor = isFailed
           ? "#ef4444"
-          : isReserved
+          : isChargingDock
           ? "#10b981"
+          : isReserved
+          ? "#0284c7"
           : isOccupied
           ? "#f97316"
+          : isLight
+          ? "#3b82f6"
           : "#64748b";
 
         return (
-          <group key={node.id} position={[node.x, 0.03, node.y]}>
+          <group
+            key={node.id}
+            position={[node.x, 0.03, node.y]}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onSelectNode) onSelectNode(node.id);
+            }}
+          >
+            {/* Elevated 3D Station Dock */}
             <mesh rotation={[-Math.PI / 2, 0, 0]}>
-              <circleGeometry args={[0.18, 24]} />
-              <meshBasicMaterial color={circleColor} side={DoubleSide} />
+              <circleGeometry args={[0.26, 32]} />
+              <meshStandardMaterial
+                color={circleColor}
+                roughness={0.2}
+                metalness={0.1}
+                side={DoubleSide}
+              />
+            </mesh>
+
+            {/* Outer Ring Border */}
+            <mesh rotation={[-Math.PI / 2, 0, 0]}>
+              <ringGeometry args={[0.26, 0.32, 32]} />
+              <meshBasicMaterial
+                color={isSelected ? "#ec4899" : isChargingDock ? "#059669" : isLight ? "#93c5fd" : "#475569"}
+                side={DoubleSide}
+              />
             </mesh>
 
             {/* Glowing RED Hazard Ring for Failed / Ghost Station */}
             {isFailed && (
               <mesh rotation={[-Math.PI / 2, 0, 0]}>
-                <ringGeometry args={[0.22, 0.32, 24]} />
+                <ringGeometry args={[0.34, 0.44, 32]} />
                 <meshBasicMaterial color="#ef4444" transparent opacity={0.85} side={DoubleSide} />
               </mesh>
             )}
 
-            {/* Glowing GREEN Active Trajectory Ring for Moving AMRs */}
-            {isReserved && !isFailed && (
+            {/* Selected Station Pulse Ring */}
+            {isSelected && (
               <mesh rotation={[-Math.PI / 2, 0, 0]}>
-                <ringGeometry args={[0.22, 0.28, 24]} />
-                <meshBasicMaterial color="#10b981" transparent opacity={0.7} side={DoubleSide} />
+                <ringGeometry args={[0.36, 0.48, 32]} />
+                <meshBasicMaterial color="#ec4899" transparent opacity={0.9} side={DoubleSide} />
               </mesh>
             )}
 
-            <Html position={[0, 0.22, 0]} center>
+            <Html position={[0, 0.32, 0]} center>
               <div
                 style={{
                   ...labelStyle,
-                  borderColor: isFailed
-                    ? "#ef4444"
-                    : isReserved
+                  background: isLight ? "rgba(255, 255, 255, 0.95)" : "rgba(15, 23, 42, 0.85)",
+                  color: isLight ? "#0f172a" : "#f8fafc",
+                  borderColor: isSelected
+                    ? "#ec4899"
+                    : isChargingDock
                     ? "#10b981"
+                    : isLight
+                    ? "#cbd5e1"
                     : "rgba(100, 116, 139, 0.4)",
+                  boxShadow: isLight ? "0 2px 8px rgba(0,0,0,0.12)" : "none",
+                  cursor: "pointer",
                 }}
               >
-                {node.id}
+                {isChargingDock ? `⚡ ${node.id} (Bay)` : node.id}
               </div>
             </Html>
           </group>
         );
       })}
 
-      {/* Grid Network Edges (Highlighted RED if connected to a Failed Ghost Node) */}
-      {map.edges.map((edge, i) => {
+      {/* Directed Graph Edges with Dynamic Color Coding */}
+      {map.edges.map((edge) => {
         const from = nodeById.get(edge.from);
         const to = nodeById.get(edge.to);
         if (!from || !to) return null;
 
         const isGhostCorridor = failedNodes.has(edge.from) || failedNodes.has(edge.to);
-        const edgeColor = isGhostCorridor ? "#ef4444" : "#334155";
-        const arrowColor = isGhostCorridor ? "#ef4444" : "#475569";
 
-        const points = new Float32Array([from.x, 0.02, from.y, to.x, 0.02, to.y]);
+        const edgeColor = isGhostCorridor
+          ? "#ef4444"
+          : isLight
+          ? "#94a3b8"
+          : "#475569";
+        const arrowColor = isGhostCorridor
+          ? "#ef4444"
+          : isLight
+          ? "#64748b"
+          : "#94a3b8";
+
+        const midX = (from.x + to.x) / 2;
+        const midY = (from.y + to.y) / 2;
         const angle = Math.atan2(to.y - from.y, to.x - from.x);
-        const midX = from.x + (to.x - from.x) * 0.6;
-        const midY = from.y + (to.y - from.y) * 0.6;
+        const pts = new Float32Array([from.x, 0.02, from.y, to.x, 0.02, to.y]);
 
         return (
-          <group key={i}>
+          <group key={`${edge.from}->${edge.to}`}>
             <line>
               <bufferGeometry>
-                <bufferAttribute attach="attributes-position" args={[points, 3]} />
+                <bufferAttribute attach="attributes-position" args={[pts, 3]} />
               </bufferGeometry>
               <lineBasicMaterial
                 color={edgeColor}
-                linewidth={isGhostCorridor ? 3 : 1}
+                linewidth={isGhostCorridor ? 3 : 2}
                 transparent
-                opacity={isGhostCorridor ? 0.95 : 0.6}
+                opacity={isGhostCorridor ? 0.95 : 0.8}
               />
             </line>
             <group position={[midX, 0.025, midY]} rotation={[0, -angle, 0]}>
@@ -218,7 +263,7 @@ function MapGeometry({ map, amrs }) {
   );
 }
 
-function AmrModel({ amr, map }) {
+function AmrModel({ amr, map, theme = "light" }) {
   const wheelRadius = Math.min(map.amr_width, map.amr_length) * 0.15;
   const wheelThickness = wheelRadius * 0.6;
   const chassisHeight = wheelRadius * 1.6;
@@ -233,7 +278,9 @@ function AmrModel({ amr, map }) {
   );
   const identityColor = useMemo(() => colorForId(amr.id), [amr.id]);
   const chassisColor =
-    amr.colliding || amr.state_label === "FAILED"
+    amr.is_remote
+      ? "#0284c7"
+      : amr.colliding || amr.state_label === "FAILED"
       ? "#ef4444"
       : amr.state_label === "YIELDING"
       ? "#f59e0b"
@@ -260,6 +307,8 @@ function AmrModel({ amr, map }) {
     [-wheelInsetL, 0, -wheelInsetW],
   ];
 
+  const isLight = theme === "light";
+
   return (
     <group
       position={[amr.position.x, wheelRadius, amr.position.y]}
@@ -267,13 +316,30 @@ function AmrModel({ amr, map }) {
     >
       <mesh position={[0, chassisHeight / 2, 0]}>
         <boxGeometry args={[map.amr_length, chassisHeight, map.amr_width]} />
-        <meshStandardMaterial color={chassisColor} />
+        <meshStandardMaterial
+          color={chassisColor}
+          wireframe={Boolean(amr.is_remote)}
+          transparent={Boolean(amr.is_remote)}
+          opacity={amr.is_remote ? 0.75 : 1.0}
+          roughness={0.3}
+          metalness={0.2}
+        />
       </mesh>
       <group position={[0, chassisHeight + 0.01, 0]}>
-        <FlatArrow shape={noseArrowShape} color="#fbbf24" />
+        <FlatArrow shape={noseArrowShape} color={amr.is_remote ? "#38bdf8" : "#fbbf24"} />
       </group>
       <Html position={[0, chassisHeight + 0.45, 0]} center>
-        <div style={labelStyle}>{amr.id}</div>
+        <div
+          style={{
+            ...labelStyle,
+            background: isLight ? "rgba(255, 255, 255, 0.95)" : "rgba(15, 23, 42, 0.85)",
+            color: amr.is_remote ? "#0284c7" : isLight ? "#0f172a" : "#f8fafc",
+            borderColor: amr.is_remote ? "#0284c7" : isLight ? "#cbd5e1" : "rgba(100, 116, 139, 0.4)",
+            boxShadow: isLight ? "0 2px 8px rgba(0,0,0,0.15)" : "none",
+          }}
+        >
+          {amr.is_remote ? `📡 ${amr.id} (Remote)` : amr.id}
+        </div>
       </Html>
       {wheelPositions.map((pos, i) => (
         <group
@@ -303,19 +369,19 @@ function AmrModel({ amr, map }) {
   );
 }
 
-function AmrModels({ map, amrs }) {
+function AmrModels({ map, amrs, theme }) {
   const simAmrs = amrs || useSimulationState();
 
   return (
     <group>
       {simAmrs.map((amr) => (
-        <AmrModel key={amr.id} amr={amr} map={map} />
+        <AmrModel key={amr.id} amr={amr} map={map} theme={theme} />
       ))}
     </group>
   );
 }
 
-export function Scene({ amrs }) {
+export function Scene({ amrs, selectedNode, onSelectNode, theme = "light" }) {
   const [map, setMap] = useState(null);
   const simAmrs = amrs || useSimulationState();
 
@@ -332,12 +398,38 @@ export function Scene({ amrs }) {
     { x: 0, y: 0 }
   );
 
+  const isLight = theme === "light";
+
   return (
-    <Canvas camera={{ position: [center.x, 14, center.y + 10], fov: 48 }}>
-      <ambientLight intensity={0.8} />
-      <directionalLight position={[5, 12, 5]} intensity={0.7} />
-      <MapGeometry map={map} amrs={simAmrs} />
-      <AmrModels map={map} amrs={simAmrs} />
+    <Canvas
+      camera={{ position: [center.x, 14, center.y + 10], fov: 48 }}
+      style={{ background: isLight ? "#f8fafc" : "#0b0f17" }}
+    >
+      <ambientLight intensity={isLight ? 1.1 : 0.8} />
+      <directionalLight position={[5, 14, 5]} intensity={isLight ? 0.9 : 0.7} />
+
+      {/* Warehouse Floor & Floor Grid */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[center.x, 0, center.y]}>
+        <planeGeometry args={[40, 40]} />
+        <meshStandardMaterial
+          color={isLight ? "#f1f5f9" : "#080c14"}
+          roughness={0.4}
+          metalness={0.1}
+        />
+      </mesh>
+      <gridHelper
+        args={[40, 40, isLight ? "#94a3b8" : "#334155", isLight ? "#e2e8f0" : "#1e293b"]}
+        position={[center.x, 0.01, center.y]}
+      />
+
+      <MapGeometry
+        map={map}
+        amrs={simAmrs}
+        selectedNode={selectedNode}
+        onSelectNode={onSelectNode}
+        theme={theme}
+      />
+      <AmrModels map={map} amrs={simAmrs} theme={theme} />
       <OrbitControls target={[center.x, 0, center.y]} />
     </Canvas>
   );

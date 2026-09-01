@@ -65,13 +65,17 @@ class CBBAEngine:
                 overlap_count = len(pickup_edges.intersection(dropoff_reverse_edges))
                 backtrack_penalty = overlap_count * 8.0  # Turnaround & double-transit traffic latency
 
-            total_true_cost = cost_to_pickup + cost_to_dropoff + backtrack_penalty
+            # 4. Queue Load Balancing Penalty: busy robots with queued tasks defer to idle robots
+            queue_penalty = len(self.state.bundle) * 15.0
+
+            total_true_cost = cost_to_pickup + cost_to_dropoff + backtrack_penalty + queue_penalty
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return 0.0
 
-        # Reward formula: higher priority and lower true delivery cost yield highest bid
+        # Reward formula: higher priority, lower true delivery cost, and idle availability bonus
+        idle_bonus = 1.4 if len(self.state.bundle) == 0 else 1.0
         battery_factor = max(0.1, battery_soc / 100.0)
-        base_bid = (100.0 * task.priority) / (1.0 + total_true_cost)
+        base_bid = ((100.0 * task.priority) / (1.0 + total_true_cost)) * idle_bonus
         return float(round(base_bid * battery_factor, 3))
 
     def phase1_build_bundle(
@@ -111,7 +115,11 @@ class CBBAEngine:
                     task, ref_node, battery_soc, occupied_nodes=occupied_nodes, failed_nodes=failed_nodes
                 )
                 current_winner_bid = self.state.winning_bids.get(task_id, 0.0)
-                marginal_gain = bid_val - current_winner_bid
+                winner_agent = self.state.winning_agents.get(task_id, "")
+                if winner_agent == self.agent_id:
+                    marginal_gain = bid_val
+                else:
+                    marginal_gain = bid_val - current_winner_bid
 
                 if marginal_gain > best_marginal_gain and bid_val > 0.0:
                     best_marginal_gain = marginal_gain

@@ -189,3 +189,42 @@ def test_ghost_node_bypass_single_pickup_and_smooth_delivery(warehouse_graph):
     # Verify that the ghost node 'n1' was NEVER visited
     assert "n1" not in visited_nodes, "Robot should NEVER visit the ghost node n1!"
 
+
+def test_auto_simulation_continuous_stream_and_drain(warehouse_graph):
+    """Verify that a continuous stream of auto-simulation tasks across the warehouse
+    executes with zero collisions and completes cleanly.
+    """
+    sim = Simulation(
+        graph=warehouse_graph,
+        amr_configs=[
+            {"id": "amr-1", "start_node": "n1"},
+            {"id": "amr-2", "start_node": "n3"},
+            {"id": "amr-3", "start_node": "n6"},
+        ],
+        speed=5.0,
+        width=0.6,
+        length=0.8,
+    )
+
+    task_pairs = [
+        ("auto-1", "n1", "n3", 3),
+        ("auto-2", "n4", "n6", 2),
+        ("auto-3", "n2", "n5", 2),
+        ("auto-4", "n6", "n1", 1),
+    ]
+
+    for tid, u, v, prio in task_pairs:
+        sim.add_task(tid, pickup_node=u, dropoff_node=v, priority=prio)
+
+    collisions = 0
+    for _ in range(200):
+        sim.step(0.1)
+        for amr in sim.amrs.values():
+            if amr.colliding:
+                collisions += 1
+
+    assert collisions == 0, f"Collisions occurred during auto-simulation: {collisions}"
+    for tid, _, _, _ in task_pairs:
+        assert sim.tasks[tid].status == TaskStatus.COMPLETED, f"Task {tid} failed to reach COMPLETED status: {sim.tasks[tid].status}"
+
+
