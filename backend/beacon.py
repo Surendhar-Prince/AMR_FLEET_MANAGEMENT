@@ -104,6 +104,7 @@ class UDPNetworkManager:
         port: int = BEACON_PORT_DEFAULT,
         broadcast_address: str = "255.255.255.255",
         fleet_prefix: str = "",
+        peer_ips: list[str] | None = None,
     ):
         self.port = port
         self.fleet_prefix = fleet_prefix
@@ -111,6 +112,10 @@ class UDPNetworkManager:
 
         # Detect all local subnet broadcast addresses (e.g. 10.1.0.255, 192.168.1.255)
         self.broadcast_targets = self._detect_broadcast_targets(broadcast_address)
+        if peer_ips:
+            for ip in peer_ips:
+                if ip and ip not in self.broadcast_targets:
+                    self.broadcast_targets.append(ip)
 
         # Send socket
         self._send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

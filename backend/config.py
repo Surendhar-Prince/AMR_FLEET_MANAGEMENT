@@ -17,6 +17,7 @@ class Config:
     beacon_interval_s: float = 1.0
     fleet_prefix: str = ""
     p2p_mesh_enabled: bool = True
+    peer_ips: list[str] | None = None
 
 
 def load_config(path: str) -> Config:
@@ -57,4 +58,5 @@ def load_config(path: str) -> Config:
         beacon_interval_s=data.get("beacon_interval_s", 1.0),
         fleet_prefix=fleet_prefix,
         p2p_mesh_enabled=data.get("p2p_mesh_enabled", True),
+        peer_ips=data.get("peer_ips", []),
     )

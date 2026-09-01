@@ -46,7 +46,9 @@ def build_app(config: Config) -> FastAPI:
     network_manager: Optional[UDPNetworkManager] = None
     if getattr(config, "p2p_mesh_enabled", True):
         network_manager = UDPNetworkManager(
-            port=config.beacon_port, fleet_prefix=getattr(config, "fleet_prefix", "")
+            port=config.beacon_port,
+            fleet_prefix=getattr(config, "fleet_prefix", ""),
+            peer_ips=getattr(config, "peer_ips", []),
         )
         simulation.network_manager = network_manager
 
