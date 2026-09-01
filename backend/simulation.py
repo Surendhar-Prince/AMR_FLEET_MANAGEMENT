@@ -663,6 +663,17 @@ class Simulation:
                         collision_imminent = True
                         break
 
+            if not collision_imminent:
+                for r_amr in self.remote_amrs.values():
+                    pos = r_amr.get("position", {})
+                    rx = pos.get("x", 0.0)
+                    ry = pos.get("y", 0.0)
+                    rh = r_amr.get("heading", 0.0)
+                    r_rect = (rx, ry, rh, self.width, self.length)
+                    if rectangles_overlap(cand_rect, r_rect):
+                        collision_imminent = True
+                        break
+
             if collision_imminent:
                 amr.state_label = "YIELDING"
                 break
