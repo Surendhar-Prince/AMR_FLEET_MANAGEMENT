@@ -245,15 +245,33 @@ class Simulation:
                         if len(self.p2p_conversations) > 20:
                             self.p2p_conversations.pop(0)
 
-        # 4. Task status update broadcast (e.g. peer completed a delivery)
+        # 4. Task Status updates from peer laptops
         elif p_type == "TASK_STATUS":
             tid = packet.get("task_id")
             status = packet.get("status")
-            assigned_to = packet.get("assigned_to")
+            assigned_to = packet.get("assigned_to", "PEER")
             if tid in self.tasks and status:
                 self.tasks[tid].status = TaskStatus(status)
                 if assigned_to:
                     self.tasks[tid].assigned_to = assigned_to
+                if status == "COMPLETED":
+                    comp_node = self.tasks[tid].dropoff_node
+                    from backend.nlp.translator import FleetNLPTranslator
+                    nlp_trans = FleetNLPTranslator.translate_task_complete(
+                        assigned_to, tid, comp_node
+                    )
+                    self.p2p_conversations.append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "source": assigned_to,
+                        "target": "ALL_PEERS",
+                        "winner": assigned_to,
+                        "yielder": "N/A",
+                        "corridor": f"Station {comp_node} [VACANT]",
+                        "machine_protocol": nlp_trans["machine_protocol"],
+                        "human_speech": nlp_trans["human_speech"],
+                        "message": f"[{assigned_to} ➔ ALL_PEERS] \"{nlp_trans['human_speech']}\"",
+                    })
+                    self.p2p_conversations = self.p2p_conversations[-20:]
 
     def _build_congested_graph(self, for_amr_id: str) -> nx.DiGraph:
         """Create a graph with dynamic weight penalties on nodes occupied or contested by local and remote AMRs."""
@@ -415,7 +433,34 @@ class Simulation:
                     )
 
                     if not in_consensus_sync:
+                        prev_active = amr.parasite.active_task_id
                         next_node = amr.parasite.get_next_waypoint(self.tasks, amr.current_node)
+
+                        # Broadcast task completion when dropoff delivery finishes
+                        if prev_active and not amr.parasite.active_task_id and prev_active in self.tasks:
+                            comp_task = self.tasks[prev_active]
+                            if comp_task.status == TaskStatus.COMPLETED:
+                                from backend.nlp.translator import FleetNLPTranslator
+                                nlp_trans = FleetNLPTranslator.translate_task_complete(
+                                    amr.id, prev_active, comp_task.dropoff_node
+                                )
+                                self.p2p_conversations.append({
+                                    "time": time.strftime("%H:%M:%S"),
+                                    "source": amr.id,
+                                    "target": "ALL_PEERS",
+                                    "winner": amr.id,
+                                    "yielder": "N/A",
+                                    "corridor": f"Station {comp_task.dropoff_node} [VACANT]",
+                                    "machine_protocol": nlp_trans["machine_protocol"],
+                                    "human_speech": nlp_trans["human_speech"],
+                                    "message": f"[{amr.id} ➔ ALL_PEERS] \"{nlp_trans['human_speech']}\"",
+                                })
+                                self.p2p_conversations = self.p2p_conversations[-20:]
+                                if self.network_manager:
+                                    self.network_manager.broadcast_task_status(
+                                        prev_active, "COMPLETED", amr.id
+                                    )
+
                         if next_node and next_node != amr.current_node:
                             try:
                                 c_graph = self._build_congested_graph(amr.id)
