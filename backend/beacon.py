@@ -198,7 +198,7 @@ class UDPNetworkManager:
         while self._running:
             try:
                 # Use run_in_executor to avoid blocking the event loop on recvfrom
-                payload, _addr = await loop.run_in_executor(
+                payload = await loop.run_in_executor(
                     None, self._blocking_recv
                 )
                 if payload:
