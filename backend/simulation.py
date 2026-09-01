@@ -624,15 +624,19 @@ class Simulation:
 
         if amr.state_label == "YIELDING":
             amr.state_label = "TRANSIT"
+            amr.yield_start_time = 0.0
         return False
 
     def _advance(self, amr: AMR, dt: float) -> None:
         if self._resolve_traffic_conflict(amr):
+            if amr.state_label == "YIELDING" and getattr(amr, "yield_start_time", 0.0) == 0.0:
+                amr.yield_start_time = time.time()
             self._update_position(amr)
             return
 
         if amr.state_label == "YIELDING" and amr.path:
             amr.state_label = "TRANSIT"
+            amr.yield_start_time = 0.0
 
         remaining = self.speed * dt
         distance_moved = 0.0

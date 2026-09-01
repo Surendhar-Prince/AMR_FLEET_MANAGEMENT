@@ -19,6 +19,7 @@ class AMR:
     state_label: str = "IDLE"  # IDLE, BIDDING, TRANSIT, YIELDING, FAILED
     queued_targets: list[str] = field(default_factory=list)
     parasite: Optional[ParasiteNode] = None
+    yield_start_time: float = 0.0
 
     @classmethod
     def at_node(cls, amr_id: str, node_id: str, graph: nx.DiGraph, initial_battery: float = 100.0) -> "AMR":

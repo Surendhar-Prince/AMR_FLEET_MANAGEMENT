@@ -101,9 +101,26 @@ class TrafficManager:
         amr_b,
         graph: nx.DiGraph,
     ) -> tuple[str, str]:
-        """Determine Right-of-Way between two opposing AMRs."""
-        p_a = getattr(amr_a, "priority", 1) * 1000 + (100 if amr_a.path else 0)
-        p_b = getattr(amr_b, "priority", 1) * 1000 + (100 if amr_b.path else 0)
+        """Determine Right-of-Way between two opposing AMRs.
+
+        When both AMRs are in YIELDING state and have identical priority,
+        resolves right-of-way strictly via FIFO queue order (earliest yield start
+        time / arrival timestamp), preventing mutual deadlock.
+        """
+        p_a = getattr(amr_a, "priority", 1) * 1000 + (100 if getattr(amr_a, "path", []) else 0)
+        p_b = getattr(amr_b, "priority", 1) * 1000 + (100 if getattr(amr_b, "path", []) else 0)
+
+        # Queue-based resolution: if both are yielding with the exact same priority
+        st_a = getattr(amr_a, "state_label", "")
+        st_b = getattr(amr_b, "state_label", "")
+        if st_a == "YIELDING" and st_b == "YIELDING" and p_a == p_b:
+            time_a = getattr(amr_a, "yield_start_time", 0.0)
+            time_b = getattr(amr_b, "yield_start_time", 0.0)
+            if time_a > 0 and time_b > 0 and time_a != time_b:
+                if time_a < time_b:  # amr_a arrived earlier in queue -> gets right of way!
+                    return amr_a.id, amr_b.id
+                else:
+                    return amr_b.id, amr_a.id
 
         if p_a > p_b:
             return amr_a.id, amr_b.id
