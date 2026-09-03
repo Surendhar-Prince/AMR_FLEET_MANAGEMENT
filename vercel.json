@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "buildCommand": "cd viewer && npm install && npm run build",
-  "outputDirectory": "viewer/dist",
+  "outputDirectory": "viewer/dist", 
   "rewrites": [
     {
       "source": "/(.*)",
