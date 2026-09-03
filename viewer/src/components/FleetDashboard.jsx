@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { apiUrl } from "../api";
 
 export function FleetDashboard({
   amrs,
@@ -36,7 +37,7 @@ export function FleetDashboard({
 
   // 1. Fetch map nodes
   useEffect(() => {
-    fetch("/api/map")
+    fetch(apiUrl("/api/map"))
       .then((res) => res.json())
       .then((data) => {
         if (data.nodes) {
@@ -55,8 +56,8 @@ export function FleetDashboard({
     const pollServer = async () => {
       try {
         const [taskRes, cbbaRes] = await Promise.all([
-          fetch("/api/tasks"),
-          fetch("/api/cbba/state"),
+          fetch(apiUrl("/api/tasks")),
+          fetch(apiUrl("/api/cbba/state")),
         ]);
         if (taskRes.ok) {
           const taskList = await taskRes.json();
@@ -175,7 +176,7 @@ export function FleetDashboard({
     setStatusMsg("");
 
     try {
-      const res = await fetch("/api/tasks", {
+      const res = await fetch(apiUrl("/api/tasks"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -226,7 +227,7 @@ export function FleetDashboard({
   // 5. Preset Route Dispatch
   const handlePresetDispatch = async (from, to, prio = 2) => {
     try {
-      const res = await fetch("/api/tasks", {
+      const res = await fetch(apiUrl("/api/tasks"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -289,7 +290,7 @@ export function FleetDashboard({
   // 7. Toggle Fault / Kill node
   const handleToggleKill = async (amrId, isAlive) => {
     const endpoint = isAlive ? `/api/nodes/${amrId}/kill` : `/api/nodes/${amrId}/recover`;
-    await fetch(endpoint, { method: "POST" });
+    await fetch(apiUrl(endpoint), { method: "POST" });
     addBilingualLog(
       isAlive ? "ALERT" : "SYSTEM",
       isAlive ? `FAULT_TRIGGER(agent=${amrId})` : `NODE_RECOVER(agent=${amrId})`,
@@ -301,7 +302,7 @@ export function FleetDashboard({
 
   // 8. Dispatch to Charging Pad
   const handleSendToCharge = async (amrId) => {
-    await fetch(`/api/nodes/${amrId}/charge`, { method: "POST" });
+    await fetch(apiUrl(`/api/nodes/${amrId}/charge`), { method: "POST" });
     addBilingualLog(
       "ALERT",
       `CHARGE_DISPATCH(agent=${amrId}, target=n14)`,

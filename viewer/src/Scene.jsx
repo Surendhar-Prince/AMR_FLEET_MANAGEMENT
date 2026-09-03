@@ -2,6 +2,7 @@ import { Html, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DoubleSide, Shape } from "three";
+import { apiUrl } from "./api";
 import { useSimulationState } from "./useSimulationState";
 
 // A flat 2D arrow centered at the origin
@@ -386,7 +387,7 @@ export function Scene({ amrs, selectedNode, onSelectNode, theme = "light" }) {
   const simAmrs = amrs || useSimulationState();
 
   useEffect(() => {
-    fetch("/api/map")
+    fetch(apiUrl("/api/map"))
       .then((res) => res.json())
       .then(setMap);
   }, []);

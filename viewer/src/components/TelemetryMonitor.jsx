@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { apiUrl } from "../api";
 
 export function TelemetryMonitor({ amrs, isStandalone = false }) {
   const [activeView, setActiveView] = useState("all"); // "all" | "machine" | "human" | "cbba" | "fleet"
@@ -60,8 +61,8 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
     const fetchTelemetry = async () => {
       try {
         const [cbbaRes, taskRes] = await Promise.all([
-          fetch("/api/cbba/state"),
-          fetch("/api/tasks"),
+          fetch(apiUrl("/api/cbba/state")),
+          fetch(apiUrl("/api/tasks")),
         ]);
 
         if (cbbaRes.ok) {

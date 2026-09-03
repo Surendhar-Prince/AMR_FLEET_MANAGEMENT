@@ -1,0 +1,9 @@
+{
+  "name": "amr-fleet-management",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "cd viewer && npm install && npm run build",
+    "dev": "cd viewer && npm run dev"
+  }
+}

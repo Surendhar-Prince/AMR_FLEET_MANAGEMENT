@@ -6,6 +6,7 @@ from typing import Optional
 
 import networkx as nx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -92,6 +93,13 @@ def build_app(config: Config) -> FastAPI:
                 network_manager.close()
 
     app = FastAPI(lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["https://amr-fleet-management.vercel.app"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
 
     @app.get("/api/health")
     def health() -> dict:

@@ -7,9 +7,12 @@
   "amr_length": 1.2,
   "beacon_port": 9999,
   "beacon_interval_s": 1.0,
-  "fleet_prefix": "alpha",
+  "fleet_prefix": "beta",
   "p2p_mesh_enabled": true,
   "amrs": [
-    {"id": "amr-1", "start_node": "n1"}
+    {
+      "id": "amr-2",
+      "start_node": "n5"
+    }
   ]
 }
