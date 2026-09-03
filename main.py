@@ -1,5 +1,8 @@
 import sys
 import uvicorn
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from backend.config import load_config
 from backend.server import build_app

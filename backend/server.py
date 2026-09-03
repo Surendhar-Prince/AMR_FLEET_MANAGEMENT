@@ -157,7 +157,6 @@ def build_app(config: Config) -> FastAPI:
             from backend.db import create_profile_and_amr, get_profile_by_email, get_amr_by_user_id
             supabase_url = _os.environ.get("SUPABASE_URL", "")
             supabase_key = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-
             if not supabase_url or not supabase_key:
                 raise HTTPException(
                     status_code=503,
