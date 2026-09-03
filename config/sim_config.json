@@ -9,10 +9,5 @@
   "beacon_interval_s": 1.0,
   "fleet_prefix": "beta",
   "p2p_mesh_enabled": true,
-  "amrs": [
-    {
-      "id": "amr-2",
-      "start_node": "n5"
-    }
-  ]
+  "amrs": []
 }

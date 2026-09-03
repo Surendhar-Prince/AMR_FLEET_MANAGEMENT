@@ -1,4 +1,5 @@
 import math
+import threading
 import time
 from typing import Optional
 import networkx as nx
@@ -32,6 +33,9 @@ class Simulation:
         self.network_manager = None
         self.last_p2p_events: list[dict] = []
         self.p2p_conversations: list[dict] = []
+        # Protects dynamic mutations of self.amrs between the tick loop
+        # (which iterates amrs) and the registration endpoint (which inserts).
+        self._amrs_lock = threading.Lock()
 
         self.amrs: dict[str, AMR] = {
             cfg["id"]: AMR.at_node(
@@ -42,6 +46,40 @@ class Simulation:
             )
             for cfg in amr_configs
         }
+
+    def add_amr(self, amr_id: str, start_node: str) -> AMR:
+        """Dynamically insert a new AMR into the running simulation.
+
+        Called from the registration endpoint.  Thread-safe against the
+        tick loop which reads self.amrs concurrently.
+
+        Args:
+            amr_id:     Unique identifier (e.g. "amr-001").
+            start_node: A node id that exists in the loaded map graph.
+
+        Returns:
+            The newly created AMR instance.
+
+        Raises:
+            ValueError: If amr_id already exists or start_node is unknown.
+        """
+        if start_node not in self.graph.nodes:
+            raise ValueError(f"Unknown start_node: {start_node!r}")
+        with self._amrs_lock:
+            if amr_id in self.amrs:
+                raise ValueError(f"AMR id already exists: {amr_id!r}")
+            amr = AMR.at_node(
+                amr_id=amr_id,
+                node_id=start_node,
+                graph=self.graph,
+            )
+            # Replace the dict atomically so the tick loop always sees a
+            # consistent snapshot (dict assignment is GIL-protected in CPython,
+            # and the lock guards the broader check-then-insert sequence).
+            new_amrs = dict(self.amrs)
+            new_amrs[amr_id] = amr
+            self.amrs = new_amrs
+        return amr
 
     def add_task(
         self,

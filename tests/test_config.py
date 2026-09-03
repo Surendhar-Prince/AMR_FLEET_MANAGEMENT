@@ -95,7 +95,8 @@ def test_load_config_defaults_beacon_interval_to_one_second(tmp_path):
     assert config.beacon_interval_s == 1.0
 
 
-def test_load_config_rejects_empty_amr_list(tmp_path):
+def test_load_config_allows_empty_amr_list(tmp_path):
+    """An empty amrs list is valid — AMRs are now added dynamically at registration time."""
     path = write_config(
         tmp_path,
         {
@@ -109,5 +110,5 @@ def test_load_config_rejects_empty_amr_list(tmp_path):
         },
     )
 
-    with pytest.raises(ValueError, match="at least one"):
-        load_config(path)
+    config = load_config(path)
+    assert config.amrs == []

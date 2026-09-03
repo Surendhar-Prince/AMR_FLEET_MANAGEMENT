@@ -29,14 +29,12 @@ def load_config(path: str) -> Config:
     Returns:
         A populated Config.
 
-    Raises:
-        ValueError: If the amrs list is empty.
+    Note:
+        An empty 'amrs' list is now valid; AMRs are added dynamically at
+        registration time via POST /api/amrs/register.
     """
     with open(path) as f:
         data = json.load(f)
-
-    if not data["amrs"]:
-        raise ValueError("config must list at least one AMR")
 
     fleet_prefix = data.get("fleet_prefix", "")
     amrs = []

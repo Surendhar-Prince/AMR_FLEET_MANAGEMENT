@@ -2,13 +2,41 @@ import React, { useState } from "react";
 import { Scene } from "./Scene";
 import { FleetDashboard } from "./components/FleetDashboard";
 import { TelemetryMonitor } from "./components/TelemetryMonitor";
+import { RegistrationScreen } from "./components/RegistrationScreen";
 import { useSimulationState } from "./useSimulationState";
+
+// ---------------------------------------------------------------------------
+// Minimal session: we store only user_id + amr_id in sessionStorage so that
+// page navigations within the same tab don't re-show the registration form.
+// Closing the browser/tab clears it automatically.  No password is stored.
+// ---------------------------------------------------------------------------
+const SESSION_KEY = "amr_session";
+
+function loadSession() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(session) {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch {
+    /* storage unavailable – session will be in-memory only */
+  }
+}
 
 export default function App() {
   const amrs = useSimulationState();
   const [selectedNode, setSelectedNode] = useState(null);
-  const [theme, setTheme] = useState("light"); // "light" (Crisp White) | "dark"
+  const [theme, setTheme] = useState("light");
   const [showMonitorModal, setShowMonitorModal] = useState(false);
+
+  // Session state — null means "not yet registered in this tab"
+  const [session, setSession] = useState(() => loadSession());
 
   // If opened as /monitor, render standalone dedicated telemetry monitor
   if (window.location.pathname === "/monitor") {
@@ -16,6 +44,22 @@ export default function App() {
       <div className="w-screen h-screen bg-slate-950 text-slate-100 overflow-hidden">
         <TelemetryMonitor amrs={amrs} isStandalone={true} />
       </div>
+    );
+  }
+
+  // Show registration form until the user has an active session
+  if (!session) {
+    return (
+      <RegistrationScreen
+        onRegistered={(result) => {
+          const sess = {
+            userId: result.userId,
+            amrId: result.amrId,
+          };
+          saveSession(sess);
+          setSession(sess);
+        }}
+      />
     );
   }
 
@@ -43,6 +87,16 @@ export default function App() {
       <div className={`flex-1 h-full relative ${isLight ? "bg-[#f8fafc]" : "bg-[#0b0f17]"}`}>
         {/* Status HUD Header */}
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2 pointer-events-auto">
+          {/* Active AMR badge */}
+          {session?.amrId && (
+            <div className="backdrop-blur bg-slate-900/80 border border-emerald-700/60 rounded-lg px-3 py-1.5 text-xs flex items-center gap-2 shadow-lg">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="font-semibold text-emerald-400 tracking-wide uppercase">
+                {session.amrId}
+              </span>
+            </div>
+          )}
+
           <div
             className={`backdrop-blur border rounded-lg px-3 py-1.5 text-xs flex items-center gap-2 shadow-lg ${
               isLight
