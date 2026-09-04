@@ -14,16 +14,15 @@ export function useSimulationState() {
           setAmrs(data);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     // 2. High-speed 20 Hz WebSocket Stream
     let socket;
     try {
       const socketUrl = import.meta.env.VITE_API_URL
         ? apiUrl("/ws").replace(/^http/, "ws")
-        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${
-            window.location.port === "3000" ? `${window.location.hostname}:8000` : window.location.host
-          }/ws`;
+        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.port === "3000" ? `${window.location.hostname}:8000` : window.location.host
+        }/ws`;
 
       socket = new WebSocket(socketUrl);
       socketRef.current = socket;
@@ -52,7 +51,7 @@ export function useSimulationState() {
               setAmrs(data);
             }
           })
-          .catch(() => {});
+          .catch(() => { });
       }
     }, 200);
 

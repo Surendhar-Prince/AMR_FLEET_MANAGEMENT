@@ -33,5 +33,3 @@ coverage/
 # Local env files
 .env
 .env.*
-!.env.example
-!**/.env.example

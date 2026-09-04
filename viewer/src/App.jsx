@@ -1,20 +1,27 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Scene } from "./Scene";
 import { FleetDashboard } from "./components/FleetDashboard";
 import { TelemetryMonitor } from "./components/TelemetryMonitor";
 import { RegistrationScreen } from "./components/RegistrationScreen";
 import { useSimulationState } from "./useSimulationState";
+import { apiUrl } from "./api";
 
 const SESSION_KEY = "amr_session";
 
 function loadSession() {
   try {
     const raw = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && (parsed.userId || parsed.email || parsed.name)) {
+      return parsed;
+    }
+    return null;
   } catch {
     return null;
   }
 }
+
 
 function saveSession(session) {
   try {
@@ -38,6 +45,83 @@ export default function App() {
 
   // Session state
   const [session, setSession] = useState(() => loadSession());
+
+  const handleAmrSpawned = (newAmrId, allAmrs) => {
+    setSession((prevSess) => {
+      const currentAmrs = prevSess?.amrs || (prevSess?.amrId ? [prevSess.amrId] : []);
+      const updatedSess = {
+        ...(prevSess || {}),
+        amrId: newAmrId,
+        amrs: allAmrs || (currentAmrs.includes(newAmrId) ? currentAmrs : [...currentAmrs, newAmrId]),
+      };
+      saveSession(updatedSess);
+      return updatedSess;
+    });
+  };
+
+  const handleAmrRemoved = (removedAmrId) => {
+    setSession((prevSess) => {
+      const remaining = (prevSess?.amrs || []).filter((id) => id !== removedAmrId);
+      const updatedSess = {
+        ...(prevSess || {}),
+        amrs: remaining,
+        amrId: remaining.length > 0 ? remaining[0] : null,
+      };
+      saveSession(updatedSess);
+      return updatedSess;
+    });
+  };
+
+  const handleSignOut = async () => {
+    if (session?.email) {
+      try {
+        await fetch(apiUrl("/api/auth/logout"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: session.email, action: "despawn" }),
+        });
+      } catch (err) {
+        console.error("Error signing out:", err);
+      }
+    }
+    saveSession(null);
+    setSession(null);
+  };
+
+  // Auto-restore AMR into simulation if session exists but backend simulation is empty
+  const autoRestoredRef = useRef(false);
+  useEffect(() => {
+    if (session && !autoRestoredRef.current) {
+      const timer = setTimeout(async () => {
+        try {
+          const res = await fetch(apiUrl("/api/amrs"));
+          if (res.ok) {
+            const activeList = await res.json();
+            if (Array.isArray(activeList) && activeList.length === 0) {
+              const spawnRes = await fetch(apiUrl("/api/amrs/spawn"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  email: session.email || "guest",
+                  start_node: "n1",
+                }),
+              });
+              if (spawnRes.ok) {
+                const spawnData = await spawnRes.json();
+                if (spawnData.amr_id) {
+                  handleAmrSpawned(spawnData.amr_id, spawnData.amrs);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // ignore error
+        }
+        autoRestoredRef.current = true;
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [session]);
 
   // If opened as /monitor, render standalone dedicated telemetry monitor
   if (window.location.pathname === "/monitor") {
@@ -67,80 +151,12 @@ export default function App() {
     );
   }
 
-  // Auto-restore AMR into simulation if session exists but backend simulation is empty
-  const autoRestoredRef = React.useRef(false);
-  React.useEffect(() => {
-    if (session && !autoRestoredRef.current) {
-      const timer = setTimeout(async () => {
-        try {
-          const res = await fetch(apiUrl("/api/amrs"));
-          const activeList = await res.json();
-          if (Array.isArray(activeList) && activeList.length === 0) {
-            const spawnRes = await fetch(apiUrl("/api/amrs/spawn"), {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                email: session.email || "guest",
-                start_node: "n1",
-              }),
-            });
-            if (spawnRes.ok) {
-              const spawnData = await spawnRes.json();
-              if (spawnData.amr_id) {
-                handleAmrSpawned(spawnData.amr_id, spawnData.amrs);
-              }
-            }
-          }
-        } catch (e) {
-          // ignore error
-        }
-        autoRestoredRef.current = true;
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [session]);
-
   const isLight = theme === "light";
-
-  const handleSignOut = async () => {
-    if (session?.email) {
-      try {
-        await fetch(apiUrl("/api/auth/logout"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: session.email, action: "despawn" }),
-        });
-      } catch (err) {
-        console.error("Error signing out:", err);
-      }
-    }
-    saveSession(null);
-    setSession(null);
-  };
-
-  const handleAmrSpawned = (newAmrId, allAmrs) => {
-    const updatedSess = {
-      ...session,
-      amrId: newAmrId,
-      amrs: allAmrs || [...(session.amrs || []), newAmrId],
-    };
-    saveSession(updatedSess);
-    setSession(updatedSess);
-  };
-
-  const handleAmrRemoved = (removedAmrId) => {
-    const remaining = (session.amrs || []).filter((id) => id !== removedAmrId);
-    const updatedSess = {
-      ...session,
-      amrs: remaining,
-      amrId: remaining.length > 0 ? remaining[0] : null,
-    };
-    saveSession(updatedSess);
-    setSession(updatedSess);
-  };
 
   return (
     <div className={`w-screen h-screen flex overflow-hidden ${isLight ? "bg-slate-100" : "bg-slate-950"}`}>
+
+
       {/* LEFT PANEL: Control, Dispatch, CBBA & Traffic HUD */}
       <div className="w-[480px] h-full flex-shrink-0 shadow-2xl z-10 border-r border-slate-800">
         <FleetDashboard
