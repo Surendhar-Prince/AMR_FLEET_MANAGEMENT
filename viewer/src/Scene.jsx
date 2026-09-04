@@ -521,7 +521,7 @@ function AmrModel({ amr, map }) {
             }}
           >
             <span>{amr.state_label || "IDLE"}</span>
-            <span>• {amr.battery_soc ?? 100}%</span>
+            <span>• {typeof amr.battery_soc === "number" ? amr.battery_soc.toFixed(1) : 100}%</span>
             {hasPayload && <span>📦</span>}
           </div>
         </div>

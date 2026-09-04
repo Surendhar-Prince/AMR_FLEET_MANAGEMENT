@@ -899,7 +899,9 @@ export function FleetDashboard({
 
                   <div className="flex justify-between text-slate-400 text-[11px]">
                     <span>Battery:</span>
-                    <span className="text-slate-200 font-medium">{battery}%</span>
+                    <span className="text-slate-200 font-medium">
+                      {typeof battery === "number" ? battery.toFixed(1) : battery}%
+                    </span>
                   </div>
 
                   <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">

@@ -173,17 +173,17 @@ class ParasiteNode:
     ) -> None:
         """Simulate realistic battery discharge based on kinetic motion, payload mass, and idle avionics."""
         if self.is_alive and self.state_label != "CHARGING":
-            idle_drain = 0.008 * dt  # Continuous LiDAR, computing, and avionics draw
-            payload_mult = 1.45 if has_payload else 1.0  # Increased torque for active payload
-            motion_drain = distance_traveled * (0.035 * (speed ** 1.35)) * payload_mult
-            comms_drain = 0.001 if self.state_label == "BIDDING" else 0.0
+            idle_drain = 0.025 * dt  # Continuous LiDAR, computing, and avionics draw
+            payload_mult = 1.6 if has_payload else 1.0  # Increased torque for active cargo payload
+            motion_drain = distance_traveled * 0.38 * payload_mult
+            comms_drain = 0.005 if self.state_label == "BIDDING" else 0.0
             total_discharge = idle_drain + motion_drain + comms_drain
             self.battery_soc = max(1.0, round(self.battery_soc - total_discharge, 2))
 
     def recharge(self, dt: float) -> None:
         """Recharge battery when parked at charging station."""
         if self.is_alive and self.battery_soc < 100.0:
-            self.battery_soc = min(100.0, round(self.battery_soc + 8.0 * dt, 1))
+            self.battery_soc = min(100.0, round(self.battery_soc + 12.0 * dt, 1))
 
     def kill(self, tasks: dict[str, Task]) -> None:
         """Simulate hardware failure (Chaos Engineering)."""
