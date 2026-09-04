@@ -1,3 +1,4 @@
+from backend.map import path_length
 import math
 import threading
 import time
