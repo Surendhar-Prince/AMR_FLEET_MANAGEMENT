@@ -5,16 +5,11 @@ import { TelemetryMonitor } from "./components/TelemetryMonitor";
 import { RegistrationScreen } from "./components/RegistrationScreen";
 import { useSimulationState } from "./useSimulationState";
 
-// ---------------------------------------------------------------------------
-// Minimal session: we store only user_id + amr_id in sessionStorage so that
-// page navigations within the same tab don't re-show the registration form.
-// Closing the browser/tab clears it automatically.  No password is stored.
-// ---------------------------------------------------------------------------
 const SESSION_KEY = "amr_session";
 
 function loadSession() {
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
+    const raw = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -23,19 +18,25 @@ function loadSession() {
 
 function saveSession(session) {
   try {
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    if (session) {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    } else {
+      localStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(SESSION_KEY);
+    }
   } catch {
-    /* storage unavailable – session will be in-memory only */
+    /* storage unavailable */
   }
 }
 
 export default function App() {
   const amrs = useSimulationState();
   const [selectedNode, setSelectedNode] = useState(null);
-  const [theme, setTheme] = useState("light");
+  const [theme, setTheme] = useState("dark");
   const [showMonitorModal, setShowMonitorModal] = useState(false);
 
-  // Session state — null means "not yet registered in this tab"
+  // Session state
   const [session, setSession] = useState(() => loadSession());
 
   // If opened as /monitor, render standalone dedicated telemetry monitor
@@ -47,14 +48,17 @@ export default function App() {
     );
   }
 
-  // Show registration form until the user has an active session
+  // Show registration / sign-in screen if no active session
   if (!session) {
     return (
       <RegistrationScreen
         onRegistered={(result) => {
           const sess = {
             userId: result.userId,
+            email: result.email,
+            name: result.name,
             amrId: result.amrId,
+            amrs: result.amrs || [result.amrId],
           };
           saveSession(sess);
           setSession(sess);
@@ -63,16 +67,82 @@ export default function App() {
     );
   }
 
+  // Auto-restore AMR into simulation if session exists but backend simulation is empty
+  const autoRestoredRef = React.useRef(false);
+  React.useEffect(() => {
+    if (session && !autoRestoredRef.current) {
+      const timer = setTimeout(async () => {
+        try {
+          const res = await fetch(apiUrl("/api/amrs"));
+          const activeList = await res.json();
+          if (Array.isArray(activeList) && activeList.length === 0) {
+            const spawnRes = await fetch(apiUrl("/api/amrs/spawn"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: session.email || "guest",
+                start_node: "n1",
+              }),
+            });
+            if (spawnRes.ok) {
+              const spawnData = await spawnRes.json();
+              if (spawnData.amr_id) {
+                handleAmrSpawned(spawnData.amr_id, spawnData.amrs);
+              }
+            }
+          }
+        } catch (e) {
+          // ignore error
+        }
+        autoRestoredRef.current = true;
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [session]);
+
   const isLight = theme === "light";
 
+  const handleSignOut = async () => {
+    if (session?.email) {
+      try {
+        await fetch(apiUrl("/api/auth/logout"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: session.email, action: "despawn" }),
+        });
+      } catch (err) {
+        console.error("Error signing out:", err);
+      }
+    }
+    saveSession(null);
+    setSession(null);
+  };
+
+  const handleAmrSpawned = (newAmrId, allAmrs) => {
+    const updatedSess = {
+      ...session,
+      amrId: newAmrId,
+      amrs: allAmrs || [...(session.amrs || []), newAmrId],
+    };
+    saveSession(updatedSess);
+    setSession(updatedSess);
+  };
+
+  const handleAmrRemoved = (removedAmrId) => {
+    const remaining = (session.amrs || []).filter((id) => id !== removedAmrId);
+    const updatedSess = {
+      ...session,
+      amrs: remaining,
+      amrId: remaining.length > 0 ? remaining[0] : null,
+    };
+    saveSession(updatedSess);
+    setSession(updatedSess);
+  };
+
   return (
-    <div
-      className={`w-screen h-screen flex overflow-hidden font-sans select-none ${
-        isLight ? "bg-slate-100 text-slate-900" : "bg-slate-950 text-slate-100"
-      }`}
-    >
-      {/* LEFT PANEL: Fleet Control & Dispatch Dashboard */}
-      <div className="w-[440px] h-full flex-shrink-0 border-r border-slate-800/60 bg-slate-900/95 flex flex-col z-20 shadow-2xl">
+    <div className={`w-screen h-screen flex overflow-hidden ${isLight ? "bg-slate-100" : "bg-slate-950"}`}>
+      {/* LEFT PANEL: Control, Dispatch, CBBA & Traffic HUD */}
+      <div className="w-[480px] h-full flex-shrink-0 shadow-2xl z-10 border-r border-slate-800">
         <FleetDashboard
           amrs={amrs}
           selectedNode={selectedNode}
@@ -80,6 +150,9 @@ export default function App() {
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
           onOpenMonitor={() => setShowMonitorModal(true)}
+          userSession={session}
+          onAmrSpawned={handleAmrSpawned}
+          onAmrRemoved={handleAmrRemoved}
         />
       </div>
 
@@ -87,27 +160,15 @@ export default function App() {
       <div className={`flex-1 h-full relative ${isLight ? "bg-[#f8fafc]" : "bg-[#0b0f17]"}`}>
         {/* Status HUD Header */}
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2 pointer-events-auto">
-          {/* Active AMR badge */}
-          {session?.amrId && (
-            <div className="backdrop-blur bg-slate-900/80 border border-emerald-700/60 rounded-lg px-3 py-1.5 text-xs flex items-center gap-2 shadow-lg">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="font-semibold text-emerald-400 tracking-wide uppercase">
-                {session.amrId}
-              </span>
-            </div>
-          )}
-
-          <div
-            className={`backdrop-blur border rounded-lg px-3 py-1.5 text-xs flex items-center gap-2 shadow-lg ${
-              isLight
-                ? "bg-white/90 border-slate-300 text-slate-700 shadow-slate-200"
-                : "bg-slate-900/80 border-slate-700/60 text-slate-300 shadow-black/40"
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="font-semibold tracking-wide">3D Real-Time Warehouse Twin</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-bold border border-sky-300">
-              {theme.toUpperCase()} THEME
+          {/* Active AMRs Badge */}
+          <div className="backdrop-blur bg-slate-900/90 border border-emerald-700/60 rounded-lg px-3 py-1.5 text-xs flex items-center gap-2 shadow-lg">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-slate-400 font-medium">Operator:</span>
+            <span className="font-semibold text-emerald-400 tracking-wide uppercase">
+              {session.name || session.email?.split("@")[0] || "Active User"}
+            </span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 font-bold border border-emerald-700">
+              {amrs.length}/6 AMRs
             </span>
           </div>
 
@@ -118,9 +179,17 @@ export default function App() {
           >
             <span>↗ Popout Monitor</span>
           </button>
+
+          <button
+            onClick={handleSignOut}
+            className="backdrop-blur bg-red-900/80 hover:bg-red-800 text-red-200 text-xs font-semibold px-3 py-1.5 rounded-lg border border-red-700/80 transition"
+            title="Sign out of current fleet session"
+          >
+            Sign Out
+          </button>
         </div>
 
-        {/* 3D Scene with Crisp Light / Dark Map */}
+        {/* 3D Scene */}
         <Scene
           amrs={amrs}
           selectedNode={selectedNode}
@@ -129,7 +198,7 @@ export default function App() {
         />
       </div>
 
-      {/* Embedded Fullscreen Telemetry Monitor Modal (if opened via button) */}
+      {/* Embedded Fullscreen Telemetry Monitor Modal */}
       {showMonitorModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-200">
           <div className="w-full max-w-6xl h-[85vh] bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">

@@ -2,10 +2,19 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { apiUrl } from "../api";
 
 export function TelemetryMonitor({ amrs, isStandalone = false }) {
-  const [activeView, setActiveView] = useState("all"); // "all" | "machine" | "human" | "cbba" | "fleet"
+  const [activeView, setActiveView] = useState("all"); // "all" | "machine" | "human" | "cbba" | "fleet" | "history"
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState("ALL"); // "ALL" | "P2P" | "TRAFFIC" | "TASK" | "BATTERY" | "ERROR"
+  const [taskFilterStatus, setTaskFilterStatus] = useState("ALL"); // "ALL" | "COMPLETED" | "IN_PROGRESS" | "UNASSIGNED" | "FAILED"
   const [isPaused, setIsPaused] = useState(false);
+  const [taskHistory, setTaskHistory] = useState(() => {
+    try {
+      const stored = localStorage.getItem("amr_task_history");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
   const [logs, setLogs] = useState([
     {
       id: "boot-1",
@@ -60,9 +69,10 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
   useEffect(() => {
     const fetchTelemetry = async () => {
       try {
-        const [cbbaRes, taskRes] = await Promise.all([
+        const [cbbaRes, taskRes, historyRes] = await Promise.all([
           fetch(apiUrl("/api/cbba/state")),
           fetch(apiUrl("/api/tasks")),
+          fetch(apiUrl("/api/tasks/history")),
         ]);
 
         if (cbbaRes.ok) {
@@ -100,13 +110,30 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
           const tData = await taskRes.json();
           setTasks(tData);
         }
+
+        if (historyRes.ok) {
+          const hData = await historyRes.json();
+          if (Array.isArray(hData)) {
+            setTaskHistory((prev) => {
+              // Merge existing with server history
+              const map = new Map();
+              prev.forEach((t) => map.set(t.id, t));
+              hData.forEach((t) => map.set(t.id, t));
+              const merged = Array.from(map.values());
+              try {
+                localStorage.setItem("amr_task_history", JSON.stringify(merged));
+              } catch {}
+              return merged;
+            });
+          }
+        }
       } catch (err) {
         console.error("Telemetry fetch error:", err);
       }
     };
 
     fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 600);
+    const interval = setInterval(fetchTelemetry, 800);
     return () => clearInterval(interval);
   }, []);
 
@@ -165,6 +192,93 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
     });
   }, [logs, filterType, searchQuery]);
 
+  const filteredTasks = useMemo(() => {
+    return (taskHistory || []).filter((t) => {
+      if (taskFilterStatus !== "ALL" && t.status !== taskFilterStatus) return false;
+      if (!searchQuery) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        (t.id && t.id.toLowerCase().includes(q)) ||
+        (t.pickup_node && t.pickup_node.toLowerCase().includes(q)) ||
+        (t.dropoff_node && t.dropoff_node.toLowerCase().includes(q)) ||
+        (t.assigned_to && t.assigned_to.toLowerCase().includes(q)) ||
+        (t.status && t.status.toLowerCase().includes(q))
+      );
+    });
+  }, [taskHistory, taskFilterStatus, searchQuery]);
+
+  // Statistics calculation for Task History
+  const taskStats = useMemo(() => {
+    const total = taskHistory.length;
+    const completed = taskHistory.filter((t) => t.status === "COMPLETED").length;
+    const inFlight = taskHistory.filter((t) => t.status === "IN_PROGRESS" || t.status === "ASSIGNED").length;
+    const failed = taskHistory.filter((t) => t.status === "FAILED").length;
+    const completedWithDuration = taskHistory.filter((t) => t.status === "COMPLETED" && t.duration_seconds);
+    const avgDuration =
+      completedWithDuration.length > 0
+        ? (
+            completedWithDuration.reduce((acc, t) => acc + (t.duration_seconds || 0), 0) /
+            completedWithDuration.length
+          ).toFixed(1)
+        : "—";
+    const successRate = total > 0 ? ((completed / (completed + failed || 1)) * 100).toFixed(0) : "100";
+
+    return { total, completed, inFlight, failed, avgDuration, successRate };
+  }, [taskHistory]);
+
+  const handleClearCompletedTasks = async () => {
+    try {
+      await fetch(apiUrl("/api/tasks/clear"), { method: "POST" });
+      const hRes = await fetch(apiUrl("/api/tasks/history"));
+      if (hRes.ok) {
+        const hData = await hRes.json();
+        setTaskHistory(hData);
+        localStorage.setItem("amr_task_history", JSON.stringify(hData));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleResetAllTasks = async () => {
+    try {
+      await fetch(apiUrl("/api/tasks/clear?include_active=true"), { method: "POST" });
+      setTaskHistory([]);
+      localStorage.removeItem("amr_task_history");
+      const hRes = await fetch(apiUrl("/api/tasks/history"));
+      if (hRes.ok) {
+        const hData = await hRes.json();
+        setTaskHistory(hData);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleCancelTask = async (taskId) => {
+    try {
+      await fetch(apiUrl(`/api/tasks/${taskId}`), { method: "DELETE" });
+      const hRes = await fetch(apiUrl("/api/tasks/history"));
+      if (hRes.ok) {
+        const hData = await hRes.json();
+        setTaskHistory(hData);
+        localStorage.setItem("amr_task_history", JSON.stringify(hData));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const exportTaskHistory = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(taskHistory, null, 2));
+    const downloadAnchor = document.createElement("a");
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `amr_task_history_${Date.now()}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
   const exportLogs = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logs, null, 2));
     const downloadAnchor = document.createElement("a");
@@ -189,7 +303,7 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
               </span>
             </div>
             <div className="text-[11px] text-slate-400">
-              Round-Robin TDMA Mesh • Live Node Consensus Diagnostics
+              Round-Robin TDMA Mesh • Live Node Consensus & Task History Diagnostics
             </div>
           </div>
         </div>
@@ -210,13 +324,13 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
             onClick={() => setLogs([])}
             className="px-2.5 py-1 text-xs rounded bg-slate-900 border border-slate-700 text-slate-300 hover:bg-slate-800 transition font-sans"
           >
-            CLEAR
+            CLEAR LOGS
           </button>
           <button
-            onClick={exportLogs}
+            onClick={activeView === "history" ? exportTaskHistory : exportLogs}
             className="px-2.5 py-1 text-xs rounded bg-cyan-950 border border-cyan-700 text-cyan-300 hover:bg-cyan-900 transition font-sans flex items-center gap-1"
           >
-            <span>📥 EXPORT JSON</span>
+            <span>📥 {activeView === "history" ? "EXPORT TASKS" : "EXPORT JSON"}</span>
           </button>
           {!isStandalone && (
             <button
@@ -231,7 +345,7 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
       </div>
 
       {/* Network Health KPI Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 my-3 font-sans">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-2 my-3 font-sans">
         <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex flex-col">
           <span className="text-[10px] text-slate-400 uppercase font-semibold">Mesh Status</span>
           <span className="text-sm font-bold text-emerald-400 flex items-center gap-1.5">
@@ -240,22 +354,29 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
           </span>
         </div>
         <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex flex-col">
-          <span className="text-[10px] text-slate-400 uppercase font-semibold">Active Companion Nodes</span>
+          <span className="text-[10px] text-slate-400 uppercase font-semibold">Active Nodes</span>
           <span className="text-sm font-bold text-cyan-300">{networkStats.activeNodes} Nodes Online</span>
         </div>
         <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex flex-col">
-          <span className="text-[10px] text-slate-400 uppercase font-semibold">UDP Packets Exchanged</span>
+          <span className="text-[10px] text-slate-400 uppercase font-semibold">Packets Exchanged</span>
           <span className="text-sm font-bold text-indigo-300">{networkStats.packetsReceived} datagrams</span>
         </div>
         <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex flex-col">
-          <span className="text-[10px] text-slate-400 uppercase font-semibold">Mean P2P Latency</span>
-          <span className="text-sm font-bold text-emerald-300">{networkStats.latencyMs} ms (LAN)</span>
+          <span className="text-[10px] text-slate-400 uppercase font-semibold">In-Flight Tasks</span>
+          <span className="text-sm font-bold text-amber-300">
+            {tasks.filter((t) => t.status !== "COMPLETED").length} Active
+          </span>
         </div>
         <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex flex-col">
-          <span className="text-[10px] text-slate-400 uppercase font-semibold">Active Task Pool</span>
-          <span className="text-sm font-bold text-amber-300">
-            {tasks.filter((t) => t.status !== "COMPLETED").length} In-Flight / {tasks.length} Total
+          <span className="text-[10px] text-slate-400 uppercase font-semibold">Completed Missions</span>
+          <span className="text-sm font-bold text-emerald-400 flex items-center gap-1">
+            <span>✅</span>
+            <span>{taskStats.completed} Delivered</span>
           </span>
+        </div>
+        <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex flex-col">
+          <span className="text-[10px] text-slate-400 uppercase font-semibold">Task History</span>
+          <span className="text-sm font-bold text-purple-300">{taskHistory.length} Recorded</span>
         </div>
       </div>
 
@@ -271,20 +392,15 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
             All Feeds
           </button>
           <button
-            onClick={() => setActiveView("machine")}
-            className={`px-3 py-1 text-xs rounded-md transition font-medium ${
-              activeView === "machine" ? "bg-cyan-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
+            onClick={() => setActiveView("history")}
+            className={`px-3 py-1 text-xs rounded-md transition font-medium flex items-center gap-1.5 ${
+              activeView === "history" ? "bg-emerald-600 text-white shadow" : "text-emerald-400 hover:text-emerald-200"
             }`}
           >
-            UDP Machine Packets
-          </button>
-          <button
-            onClick={() => setActiveView("human")}
-            className={`px-3 py-1 text-xs rounded-md transition font-medium ${
-              activeView === "human" ? "bg-cyan-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            Natural Language Dialogues
+            <span>📋 Task History</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-950 text-emerald-200 border border-emerald-800 font-bold">
+              {taskHistory.length}
+            </span>
           </button>
           <button
             onClick={() => setActiveView("cbba")}
@@ -302,10 +418,47 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
           >
             Fleet Node Status
           </button>
+          <button
+            onClick={() => setActiveView("human")}
+            className={`px-3 py-1 text-xs rounded-md transition font-medium ${
+              activeView === "human" ? "bg-cyan-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            NLP Dialogues
+          </button>
+          <button
+            onClick={() => setActiveView("machine")}
+            className={`px-3 py-1 text-xs rounded-md transition font-medium ${
+              activeView === "machine" ? "bg-cyan-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            UDP Packets
+          </button>
         </div>
 
         {/* Filter / Search inputs */}
-        {(activeView === "all" || activeView === "machine" || activeView === "human") && (
+        {activeView === "history" ? (
+          <div className="flex items-center gap-2">
+            <select
+              value={taskFilterStatus}
+              onChange={(e) => setTaskFilterStatus(e.target.value)}
+              className="bg-slate-900 border border-slate-700 text-slate-300 text-xs rounded px-2 py-1 focus:outline-none focus:border-emerald-500"
+            >
+              <option value="ALL">All Statuses</option>
+              <option value="COMPLETED">✅ Completed</option>
+              <option value="IN_PROGRESS">🚚 In-Progress</option>
+              <option value="UNASSIGNED">⏳ Unassigned</option>
+              <option value="FAILED">❌ Failed / Cancelled</option>
+            </select>
+            <input
+              type="text"
+              placeholder="Search tasks by ID / dock / AMR..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded px-2.5 py-1 w-56 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+        ) : (activeView === "all" || activeView === "machine" || activeView === "human") && (
           <div className="flex items-center gap-2">
             <select
               value={filterType}
@@ -557,6 +710,189 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 4: Task Execution History (Mission Logs & Lifecycle Persistence) */}
+        {activeView === "history" && (
+          <div className="w-full h-full overflow-y-auto space-y-3 p-1 font-sans">
+            {/* Mission Performance Summary Bar */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 flex flex-col">
+                <span className="text-[10px] text-slate-400 uppercase font-semibold">Total Dispatched</span>
+                <span className="text-base font-bold text-slate-100">{taskStats.total} Tasks</span>
+              </div>
+              <div className="bg-slate-900/90 border border-emerald-800/60 rounded-lg p-2.5 flex flex-col">
+                <span className="text-[10px] text-emerald-400 uppercase font-semibold">Delivered (Completed)</span>
+                <span className="text-base font-bold text-emerald-400 flex items-center gap-1.5">
+                  <span>✅</span>
+                  <span>{taskStats.completed}</span>
+                  <span className="text-xs font-normal text-emerald-500">({taskStats.successRate}%)</span>
+                </span>
+              </div>
+              <div className="bg-slate-900/90 border border-amber-800/60 rounded-lg p-2.5 flex flex-col">
+                <span className="text-[10px] text-amber-400 uppercase font-semibold">In-Flight Active</span>
+                <span className="text-base font-bold text-amber-400 flex items-center gap-1.5">
+                  <span>🚚</span>
+                  <span>{taskStats.inFlight}</span>
+                </span>
+              </div>
+              <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 flex flex-col">
+                <span className="text-[10px] text-slate-400 uppercase font-semibold">Avg Delivery Time</span>
+                <span className="text-base font-bold text-cyan-300">
+                  {taskStats.avgDuration !== "—" ? `${taskStats.avgDuration}s` : "—"}
+                </span>
+              </div>
+              <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 flex flex-col">
+                <span className="text-[10px] text-slate-400 uppercase font-semibold">Failed / Blocked</span>
+                <span className="text-base font-bold text-rose-400">{taskStats.failed}</span>
+              </div>
+            </div>
+
+            {/* Action Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+              <div className="text-xs text-slate-300 font-semibold flex items-center gap-2">
+                <span>Mission Execution History Log</span>
+                <span className="text-[10px] text-slate-500 font-normal">
+                  (Showing {filteredTasks.length} of {taskHistory.length} recorded tasks)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleClearCompletedTasks}
+                  className="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
+                  title="Clear finished tasks from the active pool"
+                >
+                  🧹 Clear Finished
+                </button>
+                <button
+                  onClick={handleResetAllTasks}
+                  className="px-2.5 py-1 text-xs rounded bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-800 transition"
+                  title="Reset all tasks and return AMRs to idle"
+                >
+                  🛑 Reset All
+                </button>
+                <button
+                  onClick={exportTaskHistory}
+                  className="px-2.5 py-1 text-xs rounded bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 transition flex items-center gap-1"
+                >
+                  <span>📥 Export JSON</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Task History Table */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-lg overflow-hidden">
+              {filteredTasks.length === 0 ? (
+                <div className="p-8 text-center text-slate-500 text-xs italic">
+                  No task execution records matching your criteria. Dispatched tasks will automatically appear here with complete delivery metrics.
+                </div>
+              ) : (
+                <div className="overflow-x-auto max-h-[420px]">
+                  <table className="w-full text-xs text-left border-collapse font-mono">
+                    <thead className="sticky top-0 bg-slate-950 text-slate-300 border-b border-slate-800 z-10">
+                      <tr>
+                        <th className="p-2.5">Task ID</th>
+                        <th className="p-2.5">Pickup ➔ Dropoff</th>
+                        <th className="p-2.5">Priority</th>
+                        <th className="p-2.5">Assigned AMR</th>
+                        <th className="p-2.5">Status</th>
+                        <th className="p-2.5">Dispatched At</th>
+                        <th className="p-2.5">Duration</th>
+                        <th className="p-2.5 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {filteredTasks.map((t) => {
+                        const isCompleted = t.status === "COMPLETED";
+                        const isInProgress = t.status === "IN_PROGRESS" || t.status === "ASSIGNED";
+                        const isFailed = t.status === "FAILED";
+
+                        return (
+                          <tr key={t.id} className="hover:bg-slate-800/40 transition-colors">
+                            <td className="p-2.5 font-bold text-slate-200">{t.id}</td>
+                            <td className="p-2.5 text-slate-300">
+                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 font-bold border border-slate-700">
+                                {t.pickup_node}
+                              </span>
+                              <span className="text-slate-500 mx-1.5">➔</span>
+                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 font-bold border border-slate-700">
+                                {t.dropoff_node}
+                              </span>
+                            </td>
+                            <td className="p-2.5">
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                  t.priority === 3
+                                    ? "bg-rose-950 text-rose-300 border border-rose-800"
+                                    : t.priority === 2
+                                    ? "bg-amber-950 text-amber-300 border border-amber-800"
+                                    : "bg-slate-800 text-slate-300 border border-slate-700"
+                                }`}
+                              >
+                                P{t.priority || 1}
+                              </span>
+                            </td>
+                            <td className="p-2.5">
+                              {t.assigned_to ? (
+                                <span className="px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800 font-bold text-[11px]">
+                                  🤖 {t.assigned_to}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 italic">Unallocated</span>
+                              )}
+                            </td>
+                            <td className="p-2.5">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1 ${
+                                  isCompleted
+                                    ? "bg-emerald-950 text-emerald-300 border border-emerald-800"
+                                    : isInProgress
+                                    ? "bg-cyan-950 text-cyan-300 border border-cyan-800"
+                                    : isFailed
+                                    ? "bg-rose-950 text-rose-300 border border-rose-800"
+                                    : "bg-amber-950 text-amber-300 border border-amber-800"
+                                }`}
+                              >
+                                {isCompleted && "✅ COMPLETED"}
+                                {isInProgress && "🚚 IN_PROGRESS"}
+                                {isFailed && "❌ FAILED"}
+                                {!isCompleted && !isInProgress && !isFailed && "⏳ UNASSIGNED"}
+                              </span>
+                            </td>
+                            <td className="p-2.5 text-slate-400">
+                              {t.formatted_time || (t.created_at ? new Date(t.created_at * 1000).toLocaleTimeString() : "—")}
+                            </td>
+                            <td className="p-2.5 text-cyan-300 font-medium">
+                              {t.duration_seconds !== undefined && t.duration_seconds !== null
+                                ? `${t.duration_seconds}s`
+                                : isCompleted
+                                ? "Finished"
+                                : isInProgress
+                                ? "In-flight"
+                                : "—"}
+                            </td>
+                            <td className="p-2.5 text-right">
+                              {isInProgress || t.status === "UNASSIGNED" ? (
+                                <button
+                                  onClick={() => handleCancelTask(t.id)}
+                                  className="px-2 py-0.5 rounded bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-800 text-[10px] font-bold transition"
+                                  title="Cancel in-flight mission"
+                                >
+                                  Cancel
+                                </button>
+                              ) : (
+                                <span className="text-slate-600 text-[10px]">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}

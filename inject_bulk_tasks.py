@@ -1,40 +1,64 @@
 """Bulk Task Generator for AMR Fleet Management.
 Injects a batch of warehouse pickup/dropoff tasks and displays live CBBA bidding results.
 """
+import argparse
+import os
 import time
 import httpx
 
-SERVER_URL = "http://localhost:8000"
-
-SAMPLE_BULK_TASKS = [
-    {"task_id": "ORDER-101", "pickup_node": "n1", "dropoff_node": "n4", "priority": 3},
-    {"task_id": "ORDER-102", "pickup_node": "n3", "dropoff_node": "n10", "priority": 2},
-    {"task_id": "ORDER-103", "pickup_node": "n7", "dropoff_node": "n14", "priority": 2},
-    {"task_id": "ORDER-104", "pickup_node": "n12", "dropoff_node": "n2", "priority": 1},
-]
-
 
 def main():
+    parser = argparse.ArgumentParser(description="Inject bulk tasks into the AMR fleet CBBA pool.")
+    parser.add_argument("--url", "--server", type=str, default=os.environ.get("SERVER_URL", "http://localhost:8000"), help="Backend server URL")
+    args = parser.parse_args()
+
+    server_url = args.url.rstrip("/")
+
     print("==========================================================")
     print("🚀 INJECTING BULK TASKS INTO DECENTRALIZED POOL")
+    print(f"📡 Target Server: {server_url}")
     print("==========================================================")
 
-    client = httpx.Client(base_url=SERVER_URL, timeout=5.0)
+    client = httpx.Client(base_url=server_url, timeout=5.0)
 
     # 1. Check server health
     try:
         res = client.get("/api/health")
         if res.status_code != 200:
-            print("❌ Server is not responding. Please make sure `python main.py` is running.")
+            print(f"❌ Server at {server_url} is not responding with HTTP 200.")
             return
     except Exception as e:
-        print(f"❌ Cannot connect to {SERVER_URL}: {e}")
+        print(f"❌ Cannot connect to {server_url}: {e}")
         print("Please start the backend server in another terminal: `python main.py`")
         return
 
+    # Fetch dynamic map nodes if available
+    map_nodes = []
+    try:
+        m_res = client.get("/api/map")
+        if m_res.status_code == 200:
+            map_nodes = [n["id"] for n in m_res.json().get("nodes", [])]
+    except Exception:
+        pass
+
+    if len(map_nodes) >= 4:
+        sample_tasks = [
+            {"task_id": "ORDER-101", "pickup_node": map_nodes[0], "dropoff_node": map_nodes[3], "priority": 3},
+            {"task_id": "ORDER-102", "pickup_node": map_nodes[2], "dropoff_node": map_nodes[-1], "priority": 2},
+            {"task_id": "ORDER-103", "pickup_node": map_nodes[1], "dropoff_node": map_nodes[-2], "priority": 2},
+            {"task_id": "ORDER-104", "pickup_node": map_nodes[-3], "dropoff_node": map_nodes[1], "priority": 1},
+        ]
+    else:
+        sample_tasks = [
+            {"task_id": "ORDER-101", "pickup_node": "n1", "dropoff_node": "n4", "priority": 3},
+            {"task_id": "ORDER-102", "pickup_node": "n3", "dropoff_node": "n10", "priority": 2},
+            {"task_id": "ORDER-103", "pickup_node": "n7", "dropoff_node": "n14", "priority": 2},
+            {"task_id": "ORDER-104", "pickup_node": "n12", "dropoff_node": "n2", "priority": 1},
+        ]
+
     # 2. Inject bulk tasks
-    print(f"\n📦 Submitting {len(SAMPLE_BULK_TASKS)} warehouse tasks simultaneously...")
-    for t in SAMPLE_BULK_TASKS:
+    print(f"\n📦 Submitting {len(sample_tasks)} warehouse tasks simultaneously...")
+    for t in sample_tasks:
         resp = client.post("/api/tasks", json=t)
         if resp.status_code == 200:
             print(f"  ✅ Injected {t['task_id']}: Pickup [{t['pickup_node']}] ➔ Dropoff [{t['dropoff_node']}] (Priority: {t['priority']})")
@@ -43,6 +67,7 @@ def main():
 
     print("\n⏳ Allowing 1.5s for Decentralized CBBA Bidding & Consensus across Parasite Nodes...")
     time.sleep(1.5)
+
 
     # 3. Query CBBA Consensus State
     cbba_resp = client.get("/api/cbba/state")

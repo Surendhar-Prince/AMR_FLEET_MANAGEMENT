@@ -28,6 +28,7 @@ class Simulation:
         self.length = length
         self.traffic_manager = TrafficManager(ttl_buffer_seconds=2.0)
         self.tasks: dict[str, Task] = {}
+        self.task_history: list[dict] = []
         self.remote_amrs: dict[str, dict] = {}
         self.network_packets_count = 0
         self.network_manager = None
@@ -46,6 +47,15 @@ class Simulation:
             )
             for cfg in amr_configs
         }
+
+    def get_charging_node(self) -> str:
+        """Dynamically detect designated charging station node from the loaded map graph."""
+        for n, d in self.graph.nodes(data=True):
+            if d.get("type") == "charging" or "charge" in str(n).lower():
+                return n
+        if "n14" in self.graph.nodes:
+            return "n14"
+        return list(self.graph.nodes)[-1] if self.graph.nodes else "n1"
 
     def add_amr(self, amr_id: str, start_node: str) -> AMR:
         """Dynamically insert a new AMR into the running simulation.
@@ -81,6 +91,86 @@ class Simulation:
             self.amrs = new_amrs
         return amr
 
+    def remove_amr(self, amr_id: str) -> bool:
+        """Dynamically remove an AMR from the running simulation and release its tasks.
+
+        Args:
+            amr_id: Unique identifier to remove.
+
+        Returns:
+            True if removed, False if not found.
+        """
+        with self._amrs_lock:
+            if amr_id not in self.amrs:
+                return False
+            amr = self.amrs[amr_id]
+            # Release any tasks held by this AMR back to the pool
+            if amr.parasite:
+                for task_id in list(amr.parasite.cbba.state.bundle):
+                    if task_id in self.tasks:
+                        self.tasks[task_id].status = TaskStatus.UNASSIGNED
+                        self.tasks[task_id].assigned_to = None
+                    amr.parasite.cbba.release_task(task_id, self.tasks)
+                amr.parasite.active_task_id = None
+                amr.parasite.active_subtask = None
+
+            # Remove from space-time reservations
+            if hasattr(self.traffic_manager, "reservation_table"):
+                self.traffic_manager.reservation_table.cancel_agent(amr_id)
+
+            new_amrs = dict(self.amrs)
+            new_amrs.pop(amr_id, None)
+            self.amrs = new_amrs
+            return True
+
+    def get_occupied_nodes(self) -> set[str]:
+        """Return set of all nodes currently occupied by local or remote AMRs."""
+        occupied = {a.current_node for a in self.amrs.values()}
+        for r_amr in self.remote_amrs.values():
+            if r_curr := r_amr.get("current_node"):
+                occupied.add(r_curr)
+        return occupied
+
+    def get_charging_nodes(self) -> list[str]:
+        """Return all stations tagged as charging bays in the graph."""
+        nodes = [
+            n for n, d in self.graph.nodes(data=True)
+            if d.get("type") == "charging" or "charge" in str(n).lower()
+        ]
+        if not nodes:
+            if "n14" in self.graph.nodes:
+                nodes = ["n14"]
+            elif self.graph.nodes:
+                nodes = [list(self.graph.nodes)[-1]]
+            else:
+                nodes = ["n14"]
+        return nodes
+
+    def get_charging_node(self, from_node: Optional[str] = None) -> str:
+        """Find the closest vacant or staged charging bay among all available chargers."""
+        charging_bays = self.get_charging_nodes()
+        if not charging_bays:
+            return "n14"
+        if not from_node:
+            return charging_bays[0]
+
+        occupied = self.get_occupied_nodes()
+        vacant_bays = [b for b in charging_bays if b not in occupied]
+        target_pool = vacant_bays if vacant_bays else charging_bays
+
+        best_bay = target_pool[0]
+        best_dist = float("inf")
+        for bay in target_pool:
+            try:
+                p = astar_path(self.graph, from_node, bay)
+                d = path_length(self.graph, p)
+                if d < best_dist:
+                    best_dist = d
+                    best_bay = bay
+            except Exception:
+                pass
+        return best_bay
+
     def add_task(
         self,
         task_id: str,
@@ -104,10 +194,64 @@ class Simulation:
         )
         self.tasks[task_id] = task
 
+        # Add / update record in task_history
+        self._record_task_history(task)
+
         if broadcast and self.network_manager:
             self.network_manager.broadcast_task_announce(task.to_dict())
 
         return task
+
+    def _record_task_history(self, task: Task) -> None:
+        """Upsert a task entry in the historical log with duration calculation."""
+        t_dict = task.to_dict()
+        duration = None
+        if task.completed_at and task.created_at:
+            duration = round(task.completed_at - task.created_at, 2)
+        t_dict["duration_seconds"] = duration
+        t_dict["formatted_time"] = time.strftime("%H:%M:%S", time.localtime(task.created_at))
+
+        for idx, item in enumerate(self.task_history):
+            if item.get("id") == task.id:
+                self.task_history[idx] = t_dict
+                return
+        self.task_history.append(t_dict)
+        # Keep maximum last 200 tasks in history
+        if len(self.task_history) > 200:
+            self.task_history.pop(0)
+
+    def get_task_history(self) -> list[dict]:
+        """Return chronological history of all dispatched, active, and completed tasks."""
+        # Refresh current active tasks in history
+        for task in self.tasks.values():
+            self._record_task_history(task)
+        return list(self.task_history)
+
+    def clear_tasks(self, include_active: bool = False) -> int:
+        """Clear completed or all tasks from the active pool and update history."""
+        with self._amrs_lock:
+            cleared = 0
+            for tid in list(self.tasks.keys()):
+                t = self.tasks[tid]
+                if include_active or t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                    if include_active and t.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                        t.status = TaskStatus.FAILED
+                    self._record_task_history(t)
+                    # Release from all AMRs
+                    for amr in self.amrs.values():
+                        if amr.parasite:
+                            if tid in amr.parasite.cbba.state.bundle:
+                                amr.parasite.cbba.state.bundle = [
+                                    b for b in amr.parasite.cbba.state.bundle if b != tid
+                                ]
+                            if amr.parasite.active_task_id == tid:
+                                amr.parasite.active_task_id = None
+                                amr.parasite.active_subtask = None
+                                amr.path = []
+                                amr.state_label = "IDLE"
+                    self.tasks.pop(tid, None)
+                    cleared += 1
+            return cleared
 
     def set_order(self, amr_id: str, target_node: str) -> None:
         """Queue a direct target for an AMR (backwards-compatible)."""
@@ -344,7 +488,22 @@ class Simulation:
         return congested
 
     def step(self, dt: float) -> None:
-        """Main simulation tick."""
+        """Main simulation tick with autonomous decentralized ghost mode detection."""
+        # 0. Autonomous Decentralized Ghost Mode (Battery Depletion & Yielding Stall Timeout)
+        charging_bays = self.get_charging_nodes()
+        for amr in list(self.amrs.values()):
+            if amr.parasite and amr.parasite.is_alive:
+                # Trigger A: Autonomous Critical Battery Exhaustion (<= 1.0%)
+                if amr.parasite.battery_soc <= 1.0 and amr.current_node not in charging_bays and amr.state_label != "CHARGING":
+                    self.kill_node(amr.id)
+                    continue
+
+                # Trigger B: Autonomous Obstacle Stall / Long Yielding Timeout (> 15.0s)
+                if amr.state_label == "YIELDING" and amr.yield_start_time > 0:
+                    if (time.time() - amr.yield_start_time) >= 15.0:
+                        self.kill_node(amr.id)
+                        continue
+
         # 1. Update heartbeats and purge stale ghost path leases
         self.traffic_manager.purge_expired()
         for amr in self.amrs.values():
@@ -438,32 +597,55 @@ class Simulation:
             else:
                 amr.priority = 1
 
+        charging_bays = self.get_charging_nodes()
+
         # 5. Route autonomous CBBA tasks with dynamic congestion avoidance
         for amr in self.amrs.values():
             if amr.parasite and amr.parasite.is_alive:
-                # Recharging logic at charging dock (Station n14)
-                if amr.current_node == "n14" and not amr.path:
+                # Recharging logic at any designated charging bay (n12, n13, n14, etc.)
+                if amr.current_node in charging_bays and not amr.path:
                     if amr.parasite.battery_soc < 100.0:
                         amr.parasite.recharge(dt)
+                        amr.battery = amr.parasite.battery_soc
                         amr.state_label = "CHARGING"
                     elif amr.state_label == "CHARGING":
                         amr.state_label = "IDLE"
 
-                # Autonomous return to charge bay when battery is low (< 25%) and idle
-                if (
-                    amr.parasite.battery_soc < 25.0
-                    and not amr.path
-                    and not amr.queued_targets
-                    and not amr.parasite.active_task_id
-                    and amr.current_node != "n14"
-                ):
-                    try:
-                        charge_path = astar_path(self.graph, amr.current_node, "n14", blocked_nodes=failed_nodes)
-                        amr.path = charge_path[1:]
-                        amr.progress = 0.0
-                        amr.state_label = "LOW_BATTERY"
-                    except Exception:
-                        pass
+                # Autonomous emergency task surrender and return to closest vacant charge bay when battery is low (< 18%)
+                if amr.parasite.battery_soc <= 18.0 and amr.current_node not in charging_bays and amr.state_label != "CHARGING":
+                    target_charging_bay = self.get_charging_node(from_node=amr.current_node)
+                    if amr.parasite.active_task_id:
+                        surrender_tid = amr.parasite.active_task_id
+                        if surrender_tid in self.tasks:
+                            self.tasks[surrender_tid].status = TaskStatus.UNASSIGNED
+                            self.tasks[surrender_tid].assigned_to = None
+                        amr.parasite.cbba.release_task(surrender_tid, self.tasks)
+                        amr.parasite.active_task_id = None
+                        amr.parasite.active_subtask = None
+                        from backend.nlp.translator import FleetNLPTranslator
+                        nlp_trans = FleetNLPTranslator.translate_task_reassign(amr.id, surrender_tid)
+                        self.p2p_conversations.append({
+                            "time": time.strftime("%H:%M:%S"),
+                            "source": amr.id,
+                            "target": "ALL_PEERS",
+                            "winner": "PEER_FLEET",
+                            "yielder": amr.id,
+                            "corridor": f"Station {amr.current_node} [LOW_BATTERY]",
+                            "machine_protocol": nlp_trans["machine_protocol"],
+                            "human_speech": f"[{amr.id} ➔ ALL_PEERS] \"Battery at {amr.parasite.battery_soc}%. Surrendering task {surrender_tid}. Routing to Charging Bay {target_charging_bay}.\"",
+                            "message": f"[{amr.id} ➔ ALL_PEERS] \"Battery at {amr.parasite.battery_soc}%. Surrendering task {surrender_tid}. Routing to Charging Bay {target_charging_bay}.\"",
+                        })
+                        self.p2p_conversations = self.p2p_conversations[-20:]
+
+                    if not amr.path or amr.path[-1] not in charging_bays:
+                        try:
+                            c_graph = self._build_congested_graph(amr.id)
+                            charge_path = astar_path(c_graph, amr.current_node, target_charging_bay, blocked_nodes=failed_nodes)
+                            amr.path = charge_path[1:]
+                            amr.progress = 0.0
+                            amr.state_label = "LOW_BATTERY"
+                        except Exception:
+                            pass
 
                 # Proactive advance siding evacuation: if a remote AMR is delivering to our station, vacate in advance!
                 if not amr.path and not amr.queued_targets and amr.parasite and not amr.parasite.active_task_id:
@@ -500,6 +682,7 @@ class Simulation:
                         if prev_active and not amr.parasite.active_task_id and prev_active in self.tasks:
                             comp_task = self.tasks[prev_active]
                             if comp_task.status == TaskStatus.COMPLETED:
+                                self._record_task_history(comp_task)
                                 from backend.nlp.translator import FleetNLPTranslator
                                 nlp_trans = FleetNLPTranslator.translate_task_complete(
                                     amr.id, prev_active, comp_task.dropoff_node
@@ -583,15 +766,25 @@ class Simulation:
                     return True
                 continue
 
-            # 2. Car-Following on the SAME EDGE (Same current_node and same next_node)
-            if other.current_node == amr.current_node and other.path and other.path[0] == next_node:
-                if other.progress > amr.progress:
-                    # 'other' is in front of 'amr'. AMR must maintain safe following gap!
-                    if (other.progress - amr.progress) < safe_gap:
-                        amr.state_label = "YIELDING"
-                        return True
-                # If amr is in front of other, amr has right of way to advance
-                continue
+            # 2. Departure from SAME NODE (Car-following or diverging edges)
+            if other.current_node == amr.current_node:
+                if other.path and other.path[0] == next_node:
+                    if other.progress > amr.progress:
+                        # 'other' is in front of 'amr'. AMR must maintain safe following gap!
+                        if (other.progress - amr.progress) < safe_gap:
+                            amr.state_label = "YIELDING"
+                            return True
+                    continue
+                else:
+                    # Diverging outgoing edges from same station: grant departure precedence to higher priority or lower ID
+                    if amr.progress < 0.2 and getattr(other, "progress", 0.0) < 0.2:
+                        p_amr = getattr(amr, "priority", 1) * 1000 + (len(amr.path) if amr.path else 0)
+                        p_other = getattr(other, "priority", 1) * 1000 + (len(other.path) if other.path else 0)
+                        if p_other > p_amr or (p_other == p_amr and amr.id > other.id):
+                            amr.state_label = "YIELDING"
+                            return True
+                    continue
+
 
             # 3. Blocker is at next_node
             if other.current_node == next_node:
@@ -638,12 +831,13 @@ class Simulation:
                         preferred_forbidden = {amr.current_node}
                         if len(amr.path) > 1:
                             preferred_forbidden.add(amr.path[1])
+                        occupied = self.get_occupied_nodes()
                         evac_node = self.traffic_manager.find_evacuation_node(
-                            self.graph, other.current_node, forbidden_nodes=preferred_forbidden
+                            self.graph, other.current_node, forbidden_nodes=preferred_forbidden, occupied_nodes=occupied
                         )
                         if not evac_node:
                             evac_node = self.traffic_manager.find_evacuation_node(
-                                self.graph, other.current_node, forbidden_nodes={amr.current_node}
+                                self.graph, other.current_node, forbidden_nodes={amr.current_node}, occupied_nodes=occupied
                             )
                         if evac_node and not other.path:
                             other.path = [evac_node]
@@ -751,7 +945,7 @@ class Simulation:
             self._update_position(amr)
             return
 
-        if amr.state_label == "YIELDING" and amr.path:
+        if amr.state_label in ("IDLE", "YIELDING", "BIDDING") and amr.path:
             amr.state_label = "TRANSIT"
             amr.yield_start_time = 0.0
 
@@ -779,6 +973,9 @@ class Simulation:
             collision_imminent = False
             for other in self.amrs.values():
                 if other.id != amr.id and other.state_label != "FAILED":
+                    # If other is stationary at our origin node and we are moving away along our path, allow departure
+                    if other.current_node == amr.current_node and getattr(other, "progress", 0.0) < 0.2 and (not other.path or other.path[0] != target_node):
+                        continue
                     other_rect = (other.x, other.y, other.heading, self.width, self.length)
                     if rectangles_overlap(cand_rect, other_rect):
                         collision_imminent = True
@@ -810,9 +1007,18 @@ class Simulation:
                 amr.progress = 0.0
 
         if amr.parasite:
-            amr.parasite.drain_battery(distance_moved)
+            has_payload = bool(
+                amr.parasite.active_task_id and amr.parasite.active_subtask == "DROPOFF"
+            )
+            amr.parasite.drain_battery(
+                distance_traveled=distance_moved,
+                dt=dt,
+                speed=self.speed,
+                has_payload=has_payload,
+            )
+            amr.battery = amr.parasite.battery_soc
 
-        if not amr.path and amr.state_label != "FAILED":
+        if not amr.path and amr.state_label not in ("FAILED", "CHARGING"):
             amr.state_label = "IDLE"
 
         self._update_position(amr)

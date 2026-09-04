@@ -8,6 +8,8 @@ export function FleetDashboard({
   theme = "light",
   onToggleTheme,
   onOpenMonitor,
+  userSession,
+  onAmrSpawned,
 }) {
   const [activeTab, setActiveTab] = useState("activity"); // "activity" | "dispatch" | "cbba" | "network"
   const [langMode, setLangMode] = useState("human"); // "human" (NLP) | "machine" (UDP Code)
@@ -21,6 +23,18 @@ export function FleetDashboard({
   const [statusMsg, setStatusMsg] = useState("");
   const [autoSimActive, setAutoSimActive] = useState(false);
   const [popupAlert, setPopupAlert] = useState(null); // { title, message, type: "error" | "success" }
+  const [showSpawnModal, setShowSpawnModal] = useState(false);
+  const [spawnNode, setSpawnNode] = useState("");
+  const [spawnLoading, setSpawnLoading] = useState(false);
+
+  // Dynamic Map Editor State
+  const [newNodeId, setNewNodeId] = useState("");
+  const [newNodeX, setNewNodeX] = useState(15.0);
+  const [newNodeY, setNewNodeY] = useState(5.0);
+  const [newNodeType, setNewNodeType] = useState("dock");
+  const [connectToNode, setConnectToNode] = useState("");
+  const [edgeFrom, setEdgeFrom] = useState("");
+  const [edgeTo, setEdgeTo] = useState("");
   const [logs, setLogs] = useState([
     {
       id: "init-1",
@@ -302,12 +316,193 @@ export function FleetDashboard({
 
   // 8. Dispatch to Charging Pad
   const handleSendToCharge = async (amrId) => {
+    const chargeNode = mapNodes.find((n) => n.type === "charging")?.id || (mapNodes.length > 0 ? mapNodes[mapNodes.length - 1].id : "n14");
     await fetch(apiUrl(`/api/nodes/${amrId}/charge`), { method: "POST" });
     addBilingualLog(
       "ALERT",
-      `CHARGE_DISPATCH(agent=${amrId}, target=n14)`,
-      `⚡ Battery critical protocol initiated for ${amrId}! Autonomous return to Charging Bay Station n14.`
+      `CHARGE_DISPATCH(agent=${amrId}, target=${chargeNode})`,
+      `⚡ Battery critical protocol initiated for ${amrId}! Autonomous return to Charging Bay Station ${chargeNode}.`
     );
+  };
+
+  // 9. Spawn Additional AMR (Max 3 per User)
+  const handleSpawnAmr = async () => {
+    const targetNode = spawnNode || (mapNodes[0]?.id || "n1");
+    setSpawnLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/amrs/spawn"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: userSession?.email || "guest",
+          start_node: targetNode,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPopupAlert({
+          title: "🤖 AMR Deployed",
+          message: `Successfully spawned ${data.amr_id} at Station ${data.start_node}!`,
+          type: "success",
+        });
+        if (onAmrSpawned) {
+          onAmrSpawned(data.amr_id, data.amrs);
+        }
+        setShowSpawnModal(false);
+      } else {
+        setPopupAlert({
+          title: "Spawn Limit",
+          message: data.detail || "Could not spawn AMR.",
+          type: "error",
+        });
+      }
+    } catch (err) {
+      setPopupAlert({
+        title: "Error",
+        message: "Network error spawning AMR.",
+        type: "error",
+      });
+    } finally {
+      setSpawnLoading(false);
+    }
+  };
+
+  // 10. Decommission / Remove AMR
+  const handleRemoveAmr = async (amrId) => {
+    try {
+      const res = await fetch(apiUrl(`/api/amrs/${amrId}`), {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPopupAlert({
+          title: "🤖 AMR Decommissioned",
+          message: `Successfully removed ${amrId} and freed its station.`,
+          type: "success",
+        });
+        if (onAmrRemoved) {
+          onAmrRemoved(amrId);
+        }
+      } else {
+        setPopupAlert({
+          title: "Error",
+          message: data.detail || `Could not remove ${amrId}.`,
+          type: "error",
+        });
+      }
+    } catch (err) {
+      setPopupAlert({
+        title: "Network Error",
+        message: "Failed to connect to backend server.",
+        type: "error",
+      });
+    }
+  };
+
+  // 11. Dynamic Map Editor Handlers
+  const handleAddStation = async (e) => {
+    e.preventDefault();
+    if (!newNodeId.trim()) return;
+    try {
+      const res = await fetch(apiUrl("/api/map/nodes"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: newNodeId.trim(),
+          x: parseFloat(newNodeX) || 0,
+          y: parseFloat(newNodeY) || 0,
+          type: newNodeType,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (connectToNode) {
+          await fetch(apiUrl("/api/map/edges"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              from_node: newNodeId.trim(),
+              to_node: connectToNode,
+              bidirectional: true,
+            }),
+          });
+        }
+        setPopupAlert({
+          title: "📍 Station Added",
+          message: `Station ${newNodeId} dynamically added to warehouse layout!`,
+          type: "success",
+        });
+        setNewNodeId("");
+        fetch(apiUrl("/api/map")).then(r => r.json()).then(d => { if (d.nodes) setMapNodes(d.nodes); });
+      } else {
+        setPopupAlert({ title: "Error", message: data.detail || "Failed to add station.", type: "error" });
+      }
+    } catch (err) {
+      setPopupAlert({ title: "Error", message: "Failed to connect to backend.", type: "error" });
+    }
+  };
+
+  const handleAddCorridor = async (e) => {
+    e.preventDefault();
+    if (!edgeFrom || !edgeTo || edgeFrom === edgeTo) return;
+    try {
+      const res = await fetch(apiUrl("/api/map/edges"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from_node: edgeFrom, to_node: edgeTo, bidirectional: true }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPopupAlert({
+          title: "🛣️ Corridor Connected",
+          message: `Corridor connected between ${edgeFrom} and ${edgeTo}!`,
+          type: "success",
+        });
+        fetch(apiUrl("/api/map")).then(r => r.json()).then(d => { if (d.nodes) setMapNodes(d.nodes); });
+      } else {
+        setPopupAlert({ title: "Error", message: data.detail || "Failed to connect corridor.", type: "error" });
+      }
+    } catch (err) {
+      setPopupAlert({ title: "Error", message: "Failed to connect corridor.", type: "error" });
+    }
+  };
+
+  const handleDeleteStation = async (nodeId) => {
+    try {
+      const res = await fetch(apiUrl(`/api/map/nodes/${nodeId}`), { method: "DELETE" });
+      const data = await res.json();
+      if (res.ok) {
+        setPopupAlert({
+          title: "📍 Station Removed",
+          message: `Station ${nodeId} removed from map.`,
+          type: "success",
+        });
+        fetch(apiUrl("/api/map")).then(r => r.json()).then(d => { if (d.nodes) setMapNodes(d.nodes); });
+      } else {
+        setPopupAlert({ title: "Error", message: data.detail || `Cannot delete station ${nodeId}.`, type: "error" });
+      }
+    } catch (err) {
+      setPopupAlert({ title: "Error", message: "Failed to delete station.", type: "error" });
+    }
+  };
+
+  const handleShuffleMap = async () => {
+    try {
+      const res = await fetch(apiUrl("/api/map/shuffle"), { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setPopupAlert({
+          title: "🎲 Map Shuffled",
+          message: data.message || "Warehouse layout regenerated with AMRs positioned safely!",
+          type: "success",
+        });
+        fetch(apiUrl("/api/map")).then(r => r.json()).then(d => { if (d.nodes) setMapNodes(d.nodes); });
+      } else {
+        setPopupAlert({ title: "Error", message: data.detail || "Failed to shuffle map.", type: "error" });
+      }
+    } catch (err) {
+      setPopupAlert({ title: "Error", message: "Network error shuffling map.", type: "error" });
+    }
   };
 
   const getBadgeStyle = (state) => {
@@ -346,11 +541,10 @@ export function FleetDashboard({
       {popupAlert && (
         <div className="absolute top-16 left-3 right-3 z-50 animate-in fade-in slide-in-from-top-3 duration-200">
           <div
-            className={`p-3.5 rounded-xl border backdrop-blur-md shadow-2xl flex items-start justify-between gap-3 ${
-              popupAlert.type === "error"
+            className={`p-3.5 rounded-xl border backdrop-blur-md shadow-2xl flex items-start justify-between gap-3 ${popupAlert.type === "error"
                 ? "bg-rose-950/95 border-rose-500/80 text-rose-100 shadow-rose-950/80"
                 : "bg-emerald-950/95 border-emerald-500/80 text-emerald-100 shadow-emerald-950/80"
-            }`}
+              }`}
           >
             <div className="flex gap-2.5 items-start">
               <span className="text-xl leading-none mt-0.5">
@@ -407,11 +601,10 @@ export function FleetDashboard({
           </button>
           <button
             onClick={() => setAutoSimActive(!autoSimActive)}
-            className={`text-[10px] font-semibold px-2 py-1 rounded border transition-colors ${
-              autoSimActive
+            className={`text-[10px] font-semibold px-2 py-1 rounded border transition-colors ${autoSimActive
                 ? "bg-emerald-950 border-emerald-700 text-emerald-300 animate-pulse"
                 : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
-            }`}
+              }`}
             title="Automatically generates warehouse traffic continuously"
           >
             {autoSimActive ? "● Auto ON" : "○ Auto OFF"}
@@ -458,41 +651,46 @@ export function FleetDashboard({
       <div className="flex border-b border-slate-800 bg-slate-950/40 text-xs font-semibold text-slate-400">
         <button
           onClick={() => setActiveTab("activity")}
-          className={`flex-1 py-2 px-2 text-center border-b-2 transition-colors ${
-            activeTab === "activity"
+          className={`flex-1 py-2 px-2 text-center border-b-2 transition-colors ${activeTab === "activity"
               ? "border-sky-500 text-sky-400 bg-slate-900/50"
               : "border-transparent hover:text-slate-200 hover:bg-slate-900/30"
-          }`}
+            }`}
         >
           Activity ({logs.length})
         </button>
         <button
           onClick={() => setActiveTab("dispatch")}
-          className={`flex-1 py-2 px-2 text-center border-b-2 transition-colors ${
-            activeTab === "dispatch"
+          className={`flex-1 py-2 px-2 text-center border-b-2 transition-colors ${activeTab === "dispatch"
               ? "border-sky-500 text-sky-400 bg-slate-900/50"
               : "border-transparent hover:text-slate-200 hover:bg-slate-900/30"
-          }`}
+            }`}
         >
           Dispatch
         </button>
         <button
           onClick={() => setActiveTab("cbba")}
-          className={`flex-1 py-2 px-2 text-center border-b-2 transition-colors ${
-            activeTab === "cbba"
+          className={`flex-1 py-2 px-1 text-center border-b-2 transition-colors ${activeTab === "cbba"
               ? "border-sky-500 text-sky-400 bg-slate-900/50"
               : "border-transparent hover:text-slate-200 hover:bg-slate-900/30"
-          }`}
+            }`}
         >
-          CBBA Bids
+          CBBA
+        </button>
+        <button
+          onClick={() => setActiveTab("map")}
+          className={`flex-1 py-2 px-1 text-center border-b-2 transition-colors ${activeTab === "map"
+              ? "border-emerald-500 text-emerald-400 bg-slate-900/50"
+              : "border-transparent hover:text-slate-200 hover:bg-slate-900/30"
+            }`}
+        >
+          Map
         </button>
         <button
           onClick={() => setActiveTab("network")}
-          className={`flex-1 py-2 px-2 text-center border-b-2 transition-colors ${
-            activeTab === "network"
+          className={`flex-1 py-2 px-1 text-center border-b-2 transition-colors ${activeTab === "network"
               ? "border-sky-500 text-sky-400 bg-slate-900/50"
               : "border-transparent hover:text-slate-200 hover:bg-slate-900/30"
-          }`}
+            }`}
         >
           P2P Mesh
         </button>
@@ -502,10 +700,58 @@ export function FleetDashboard({
       <div className="p-4 overflow-y-auto flex-1 flex flex-col gap-4 text-xs">
         {/* Section: Live Fleet Status Overview (Always Visible) */}
         <div>
-          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2 flex justify-between">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2 flex justify-between items-center">
             <span>Active AMRs ({amrs.length})</span>
-            <span className="text-[10px] text-slate-500">P2P Mesh Online</span>
+            <button
+              onClick={() => {
+                const isOpening = !showSpawnModal;
+                if (isOpening) {
+                  const vacant = mapNodes.find((n) => !amrs.some((a) => a.current_node === n.id));
+                  if (vacant) setSpawnNode(vacant.id);
+                }
+                setShowSpawnModal(isOpening);
+              }}
+              className="px-2 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold tracking-wide border border-indigo-400 shadow transition flex items-center gap-1"
+              title="Spawn up to 6 AMRs under your account"
+            >
+              <span>+ Spawn AMR</span>
+              <span className="opacity-85">({amrs.length}/6)</span>
+            </button>
           </div>
+
+          {/* Spawn AMR Station Selector Dropdown */}
+          {showSpawnModal && (
+            <div className="bg-slate-950 border border-indigo-500/60 rounded-xl p-2.5 mb-3 flex flex-col gap-2 animate-in fade-in duration-200 shadow-xl">
+              <div className="flex justify-between items-center text-[11px]">
+                <span className="font-bold text-indigo-300">Deploy Additional AMR</span>
+                <span className="text-[10px] text-slate-400">Max 6 per User (Vacant Station Only)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={spawnNode}
+                  onChange={(e) => setSpawnNode(e.target.value)}
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  {mapNodes.map((n) => {
+                    const isOcc = amrs.some((a) => a.current_node === n.id);
+                    return (
+                      <option key={n.id} value={n.id} disabled={isOcc}>
+                        Station {n.id} ({n.type || "Dock"}) {isOcc ? "⛔ [Occupied]" : "✅ [Vacant]"}
+                      </option>
+                    );
+                  })}
+                </select>
+                <button
+                  onClick={handleSpawnAmr}
+                  disabled={spawnLoading}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg border border-emerald-400 shadow transition disabled:opacity-50"
+                >
+                  {spawnLoading ? "Deploying…" : "Spawn"}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-2">
             {amrs.map((amr) => {
               const state = amr.state_label || (amr.path.length > 0 ? "TRANSIT" : "IDLE");
@@ -515,9 +761,8 @@ export function FleetDashboard({
               return (
                 <div
                   key={amr.id}
-                  className={`bg-slate-950/80 border rounded-lg p-2.5 flex flex-col gap-1.5 transition-colors ${
-                    !isAlive ? "border-rose-900 bg-rose-950/20" : "border-slate-800"
-                  }`}
+                  className={`bg-slate-950/80 border rounded-lg p-2.5 flex flex-col gap-1.5 transition-colors ${!isAlive ? "border-rose-900 bg-rose-950/20" : "border-slate-800"
+                    }`}
                 >
                   <div className="flex justify-between items-center">
                     <span className="font-bold text-slate-100">{amr.id}</span>
@@ -570,11 +815,11 @@ export function FleetDashboard({
                     />
                   </div>
 
-                  <div className="flex justify-between items-center pt-1 gap-1">
+                  <div className="flex justify-between items-center pt-1 gap-1 flex-wrap">
                     <button
                       className="text-[10px] px-2 py-0.5 rounded border border-amber-800/80 bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 transition-colors flex items-center gap-0.5"
                       onClick={() => handleSendToCharge(amr.id)}
-                      title="Dispatch to Charging Pad Station n14"
+                      title="Dispatch to Charging Pad"
                     >
                       ⚡ Charge
                     </button>
@@ -582,7 +827,14 @@ export function FleetDashboard({
                       className="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-colors"
                       onClick={() => handleToggleKill(amr.id, isAlive)}
                     >
-                      {isAlive ? "Simulate Fault" : "Recover"}
+                      {isAlive ? "Sim Fault" : "Recover"}
+                    </button>
+                    <button
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-rose-900/60 bg-rose-950/30 hover:bg-rose-900/60 text-rose-300 transition-colors"
+                      onClick={() => handleRemoveAmr(amr.id)}
+                      title="Decommission and remove this AMR from fleet"
+                    >
+                      ✕ Despawn
                     </button>
                   </div>
                 </div>
@@ -722,6 +974,78 @@ export function FleetDashboard({
                 </button>
               </div>
             </div>
+
+            {/* Active & Recent Task Pool */}
+            <div>
+              <div className="flex justify-between items-center text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+                <span>Active & Recent Tasks ({tasks.length})</span>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch(apiUrl("/api/tasks/clear"), { method: "POST" });
+                      const r = await fetch(apiUrl("/api/tasks"));
+                      if (r.ok) setTasks(await r.json());
+                    }}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 border border-slate-800 px-1.5 py-0.5 rounded bg-slate-900"
+                    title="Clear completed tasks from pool"
+                  >
+                    🧹 Clear Done
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch(apiUrl("/api/tasks/clear?include_active=true"), { method: "POST" });
+                      const r = await fetch(apiUrl("/api/tasks"));
+                      if (r.ok) setTasks(await r.json());
+                    }}
+                    className="text-[10px] text-rose-400 hover:text-rose-200 border border-rose-900/60 px-1.5 py-0.5 rounded bg-rose-950/40"
+                    title="Stop and reset all tasks"
+                  >
+                    🛑 Reset
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-36 overflow-y-auto bg-slate-950/80 border border-slate-800 rounded-lg p-1.5 flex flex-col gap-1">
+                {tasks.length === 0 ? (
+                  <div className="text-slate-500 text-center py-4 text-[10px] italic">
+                    No active tasks. AMRs will remain safely idle at stations.
+                  </div>
+                ) : (
+                  tasks.map((t) => (
+                    <div
+                      key={t.id}
+                      className="p-1.5 bg-slate-900/70 border border-slate-800 rounded flex items-center justify-between text-[10px]"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono font-bold text-slate-200">{t.id}</span>
+                        <span className="text-slate-400">
+                          {t.pickup_node} ➔ {t.dropoff_node}
+                        </span>
+                        <span className="text-slate-500">(P{t.priority})</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`px-1.5 py-0.2 rounded font-semibold text-[9px] ${
+                            t.status === "COMPLETED"
+                              ? "bg-emerald-950 text-emerald-300 border border-emerald-800"
+                              : t.status === "IN_PROGRESS"
+                              ? "bg-cyan-950 text-cyan-300 border border-cyan-800"
+                              : "bg-amber-950 text-amber-300 border border-amber-800"
+                          }`}
+                        >
+                          {t.status}
+                        </span>
+                        {t.assigned_to && (
+                          <span className="text-indigo-300 font-semibold">{t.assigned_to}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -774,11 +1098,10 @@ export function FleetDashboard({
                             return (
                               <td
                                 key={aid}
-                                className={`py-1.5 px-1 text-center ${
-                                  isWinner
+                                className={`py-1.5 px-1 text-center ${isWinner
                                     ? "text-emerald-400 font-bold bg-emerald-950/40 border border-emerald-800/50 rounded"
                                     : "text-slate-400"
-                                }`}
+                                  }`}
                               >
                                 {bid > 0 ? bid.toFixed(1) : "—"}
                               </td>
@@ -857,6 +1180,188 @@ export function FleetDashboard({
                     </div>
                   ))
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: Dynamic Warehouse Map & Station Builder */}
+        {activeTab === "map" && (
+          <div className="flex flex-col gap-3">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              Dynamic Warehouse Station & Corridor Builder
+            </div>
+
+            {/* Form: Add New Station Node */}
+            <form
+              onSubmit={handleAddStation}
+              className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 flex flex-col gap-2.5 shadow-inner"
+            >
+              <div className="font-bold text-slate-200 text-xs flex items-center gap-1.5">
+                <span>📍 Add New Station Node</span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-semibold">Station ID</label>
+                  <input
+                    type="text"
+                    value={newNodeId}
+                    onChange={(e) => setNewNodeId(e.target.value)}
+                    placeholder="e.g. n15"
+                    required
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-semibold">Coord X (m)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={newNodeX}
+                    onChange={(e) => setNewNodeX(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-semibold">Coord Y (m)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={newNodeY}
+                    onChange={(e) => setNewNodeY(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-semibold">Station Type</label>
+                  <select
+                    value={newNodeType}
+                    onChange={(e) => setNewNodeType(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  >
+                    <option value="dock">Dock (Pickup/Dropoff)</option>
+                    <option value="charging">⚡ Charging Bay</option>
+                    <option value="aisle">Aisle Waypoint</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-semibold">Connect Corridor To</label>
+                  <select
+                    value={connectToNode}
+                    onChange={(e) => setConnectToNode(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  >
+                    <option value="">None (Isolated)</option>
+                    {mapNodes.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        Station {n.id} ({n.type || "dock"})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-3 rounded-lg border border-emerald-400 text-xs shadow transition flex items-center justify-center gap-1 mt-1"
+              >
+                <span>+ Add Station & Connect</span>
+              </button>
+            </form>
+
+            {/* Form: Connect Travel Corridor */}
+            <form
+              onSubmit={handleAddCorridor}
+              className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 flex flex-col gap-2 shadow-inner"
+            >
+              <div className="font-bold text-slate-200 text-xs flex items-center gap-1.5">
+                <span>🛣️ Connect Travel Corridor</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-semibold">From Station</label>
+                  <select
+                    value={edgeFrom}
+                    onChange={(e) => setEdgeFrom(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 text-xs"
+                  >
+                    <option value="">Select Station A</option>
+                    {mapNodes.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        Station {n.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-semibold">To Station</label>
+                  <select
+                    value={edgeTo}
+                    onChange={(e) => setEdgeTo(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 text-xs"
+                  >
+                    <option value="">Select Station B</option>
+                    {mapNodes.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        Station {n.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={!edgeFrom || !edgeTo || edgeFrom === edgeTo}
+                className="bg-sky-600 hover:bg-sky-500 text-white font-bold py-1.5 px-3 rounded-lg border border-sky-400 text-xs shadow transition disabled:opacity-40"
+              >
+                Connect Bidirectional Corridor
+              </button>
+            </form>
+
+            {/* List: Existing Warehouse Stations */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-2.5">
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1.5 flex justify-between">
+                <span>Warehouse Stations ({mapNodes.length})</span>
+              </div>
+              <div className="max-h-36 overflow-y-auto flex flex-col gap-1 text-xs">
+                {mapNodes.map((n) => {
+                  const isOcc = amrs.some((a) => a.current_node === n.id);
+                  return (
+                    <div
+                      key={n.id}
+                      className="flex justify-between items-center bg-slate-900/60 border border-slate-800/80 rounded px-2 py-1 text-[11px]"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono font-bold text-slate-200">{n.id}</span>
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                          {n.type || "dock"}
+                        </span>
+                        <span className="text-slate-500 text-[10px]">
+                          ({n.x}, {n.y})
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {isOcc ? (
+                          <span className="text-[9px] text-amber-400 font-medium">Occupied</span>
+                        ) : (
+                          <button
+                            onClick={() => handleDeleteStation(n.id)}
+                            className="text-[9px] text-rose-400 hover:text-rose-200 px-1 py-0.5 rounded border border-rose-900 bg-rose-950/30 hover:bg-rose-900/40 transition"
+                            title={`Delete station ${n.id}`}
+                          >
+                            ✕ Del
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>

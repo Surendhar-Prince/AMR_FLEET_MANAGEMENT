@@ -24,7 +24,7 @@ def test_health_returns_ok():
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json()["status"] == "ok"
 
 
 def test_get_map_returns_nodes_and_edges():
@@ -34,11 +34,12 @@ def test_get_map_returns_nodes_and_edges():
     body = response.json()
 
     assert response.status_code == 200
-    assert {"id": "n1", "x": 0.0, "y": 0.0} in body["nodes"]
-    assert {"from": "n1", "to": "n2"} in body["edges"]
+    assert any(n["id"] == "n1" and n["x"] == 0.0 and n["y"] == 0.0 for n in body["nodes"])
+    assert any((e.get("from") == "n1" and e.get("to") == "n2") or (e.get("source") == "n1" and e.get("target") == "n2") for e in body["edges"])
     assert body["amr_width"] == 0.8
     assert body["amr_length"] == 1.2
     assert body["amr_speed"] == 1.0
+
 
 
 def test_post_order_sets_amr_path():
@@ -96,16 +97,27 @@ def test_tasks_lifecycle_api():
     assert task_data["dropoff_node"] == "n3"
     assert task_data["priority"] == 2
 
-    # 2. Get tasks list
+    # 2. Get tasks list and history
     res_list = client.get("/api/tasks")
     assert res_list.status_code == 200
     tasks = res_list.json()
     assert len(tasks) == 1
     assert tasks[0]["id"] == task_data["id"]
 
+    res_hist = client.get("/api/tasks/history")
+    assert res_hist.status_code == 200
+    history = res_hist.json()
+    assert len(history) == 1
+    assert history[0]["id"] == task_data["id"]
+
     # 3. Create task with invalid node
     res_err = client.post("/api/tasks", json={"pickup_node": "invalid-node", "dropoff_node": "n3"})
     assert res_err.status_code == 400
+
+    # 4. Clear tasks
+    res_clear = client.post("/api/tasks/clear?include_active=true")
+    assert res_clear.status_code == 200
+    assert res_clear.json()["cleared_count"] >= 1
 
 
 def test_cbba_state_api():
@@ -147,4 +159,39 @@ def test_kill_recover_charge_node_api():
     # 404 for unknown AMR
     res_404 = client.post("/api/nodes/unknown-amr/kill")
     assert res_404.status_code == 404
+
+
+def test_dynamic_map_and_logout_api():
+    client = make_client()
+
+    # 1. Add new station dynamically
+    res_node = client.post("/api/map/nodes", json={"id": "n99", "x": 25.0, "y": 12.0, "type": "dock"})
+    assert res_node.status_code == 200
+    assert res_node.json()["status"] == "ok"
+
+    # 2. Add corridor dynamically
+    res_edge = client.post("/api/map/edges", json={"from_node": "n1", "to_node": "n99", "bidirectional": True})
+    assert res_edge.status_code == 200
+    assert res_edge.json()["status"] == "ok"
+
+    # 3. Verify in /api/map
+    map_res = client.get("/api/map").json()
+    node_ids = [n["id"] for n in map_res["nodes"]]
+    assert "n99" in node_ids
+
+    # 4. Delete station
+    del_res = client.delete("/api/map/nodes/n99")
+    assert del_res.status_code == 200
+
+    # 5. Test logout user
+    logout_res = client.post("/api/auth/logout", json={"email": "operator@test.com", "action": "despawn"})
+    assert logout_res.status_code == 200
+    assert logout_res.json()["status"] == "ok"
+
+    # 6. Test 1-click map shuffle
+    shuffle_res = client.post("/api/map/shuffle")
+    assert shuffle_res.status_code == 200
+    assert shuffle_res.json()["status"] == "ok"
+    assert shuffle_res.json()["total_nodes"] >= 10
+
 

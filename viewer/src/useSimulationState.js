@@ -6,17 +6,60 @@ export function useSimulationState() {
   const socketRef = useRef(null);
 
   useEffect(() => {
-    const socketUrl = import.meta.env.VITE_API_URL
-      ? apiUrl("/ws").replace(/^http/, "ws")
-      : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
-    const socket = new WebSocket(socketUrl);
-    socketRef.current = socket;
+    // 1. Immediate REST fetch on page load so AMRs never disappear on refresh
+    fetch(apiUrl("/api/amrs"))
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setAmrs(data);
+        }
+      })
+      .catch(() => {});
 
-    socket.onmessage = (event) => {
-      setAmrs(JSON.parse(event.data));
+    // 2. High-speed 20 Hz WebSocket Stream
+    let socket;
+    try {
+      const socketUrl = import.meta.env.VITE_API_URL
+        ? apiUrl("/ws").replace(/^http/, "ws")
+        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${
+            window.location.port === "3000" ? `${window.location.hostname}:8000` : window.location.host
+          }/ws`;
+
+      socket = new WebSocket(socketUrl);
+      socketRef.current = socket;
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (Array.isArray(data)) {
+            setAmrs(data);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+    } catch (e) {
+      console.error("WebSocket connection error:", e);
+    }
+
+    // 3. Fallback polling loop (200ms) to ensure continuous synchronization
+    const pollInterval = setInterval(() => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        fetch(apiUrl("/api/amrs"))
+          .then((res) => (res.ok ? res.json() : []))
+          .then((data) => {
+            if (Array.isArray(data)) {
+              setAmrs(data);
+            }
+          })
+          .catch(() => {});
+      }
+    }, 200);
+
+    return () => {
+      if (socket) socket.close();
+      clearInterval(pollInterval);
     };
-
-    return () => socket.close();
   }, []);
 
   return amrs;

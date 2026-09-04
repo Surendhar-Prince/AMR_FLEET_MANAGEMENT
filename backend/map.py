@@ -21,7 +21,12 @@ def load_map(path: str) -> nx.DiGraph:
 
     graph = nx.DiGraph()
     for node in data["nodes"]:
-        graph.add_node(node["id"], x=node["x"], y=node["y"])
+        graph.add_node(
+            node["id"],
+            x=node["x"],
+            y=node["y"],
+            type=node.get("type", "aisle"),
+        )
 
     for edge in data["edges"]:
         from_node = graph.nodes[edge["from"]]
@@ -111,3 +116,57 @@ def path_length(graph: nx.DiGraph, path: list[str]) -> float:
             (graph.nodes[v]["x"], graph.nodes[v]["y"])
         ))
     return total
+
+
+def generate_procedural_map(variation_scale: float = 0.3) -> nx.DiGraph:
+    """Generate the authentic 14-node warehouse topology with dynamic coordinate variations and full cross-corridors."""
+    import random
+
+    base_nodes = [
+        {"id": "n1", "x": 0.0, "y": 0.0, "type": "dock"},
+        {"id": "n2", "x": 3.5, "y": 0.0, "type": "aisle"},
+        {"id": "n3", "x": 7.0, "y": 0.0, "type": "aisle"},
+        {"id": "n4", "x": 10.5, "y": 0.0, "type": "aisle"},
+        {"id": "n5", "x": 13.5, "y": 2.5, "type": "charging"},  # Corner Bay 3
+        {"id": "n6", "x": 10.5, "y": 5.5, "type": "aisle"},
+        {"id": "n7", "x": 7.0, "y": 5.5, "type": "aisle"},
+        {"id": "n8", "x": 3.5, "y": 5.5, "type": "aisle"},
+        {"id": "n9", "x": 0.0, "y": 5.5, "type": "dock"},
+        {"id": "n10", "x": 0.0, "y": 9.0, "type": "charging"},  # Corner Bay 2
+        {"id": "n11", "x": 3.5, "y": 9.0, "type": "aisle"},
+        {"id": "n12", "x": 7.0, "y": 9.0, "type": "aisle"},
+        {"id": "n13", "x": 10.5, "y": 9.0, "type": "aisle"},
+        {"id": "n14", "x": 13.5, "y": 9.0, "type": "charging"}, # Corner Bay 1
+    ]
+
+    base_corridors = [
+        ("n1", "n2"), ("n2", "n3"), ("n3", "n4"), ("n4", "n5"),
+        ("n5", "n6"), ("n6", "n7"), ("n7", "n8"), ("n8", "n9"),
+        ("n9", "n10"), ("n10", "n11"), ("n11", "n12"), ("n12", "n13"),
+        ("n13", "n14"), ("n14", "n5"),
+        # Authentic Cross-Aisle and Diagonal Shortcuts
+        ("n1", "n9"), ("n3", "n7"), ("n6", "n12"), ("n8", "n11"),
+        ("n10", "n13"),
+    ]
+
+    graph = nx.DiGraph()
+    for n in base_nodes:
+        jx = round(random.uniform(-variation_scale, variation_scale), 2)
+        jy = round(random.uniform(-variation_scale, variation_scale), 2)
+        graph.add_node(
+            n["id"],
+            x=round(n["x"] + jx, 2),
+            y=round(n["y"] + jy, 2),
+            type=n["type"],
+        )
+
+    for u, v in base_corridors:
+        d = math.dist(
+            (graph.nodes[u]["x"], graph.nodes[u]["y"]),
+            (graph.nodes[v]["x"], graph.nodes[v]["y"]),
+        )
+        graph.add_edge(u, v, weight=round(d, 2))
+        graph.add_edge(v, u, weight=round(d, 2))
+
+    return graph
+

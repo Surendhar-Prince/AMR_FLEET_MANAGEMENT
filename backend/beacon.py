@@ -1,10 +1,11 @@
 import json
+import os
 import socket
 import sys
 import uuid
 from typing import Protocol
 
-BEACON_PORT_DEFAULT = 9999
+BEACON_PORT_DEFAULT = int(os.environ.get("BEACON_PORT", 9999))
 
 
 def encode_beacon_message(amr_id: str, x: float, y: float, goal: str | None) -> bytes:
