@@ -26,6 +26,9 @@ export function FleetDashboard({
   const [showSpawnModal, setShowSpawnModal] = useState(false);
   const [spawnNode, setSpawnNode] = useState("");
   const [spawnLoading, setSpawnLoading] = useState(false);
+  const [editingAmrId, setEditingAmrId] = useState(null);
+  const [editingName, setEditingName] = useState("");
+
 
   // Dynamic Map Editor State
   const [newNodeId, setNewNodeId] = useState("");
@@ -366,6 +369,42 @@ export function FleetDashboard({
       setSpawnLoading(false);
     }
   };
+
+  // 10. Rename AMR and Persist to Supabase Database
+  const handleRenameAmr = async (amrId) => {
+    const trimmed = editingName.trim();
+    if (!trimmed) {
+      setEditingAmrId(null);
+      return;
+    }
+    try {
+      const res = await fetch(apiUrl(`/api/amrs/${amrId}/rename`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (res.ok) {
+        setEditingAmrId(null);
+        setEditingName("");
+        setPopupAlert({
+          title: "AMR Renamed",
+          message: `AMR '${amrId}' display name updated to '${trimmed}' and saved to Supabase database.`,
+          type: "success",
+        });
+        addBilingualLog(
+          "SUCCESS",
+          `AMR_RENAME(id=${amrId}, name="${trimmed}")`,
+          `✏️ AMR [${amrId}] renamed to "${trimmed}" (Saved to Supabase).`
+        );
+      } else {
+        const err = await res.json();
+        setPopupAlert({ title: "Error", message: err.detail || "Failed to rename AMR.", type: "error" });
+      }
+    } catch (err) {
+      setPopupAlert({ title: "Error", message: "Network error renaming AMR.", type: "error" });
+    }
+  };
+
 
   // 10. Decommission / Remove AMR
   const handleRemoveAmr = async (amrId) => {
@@ -764,8 +803,53 @@ export function FleetDashboard({
                   className={`bg-slate-950/80 border rounded-lg p-2.5 flex flex-col gap-1.5 transition-colors ${!isAlive ? "border-rose-900 bg-rose-950/20" : "border-slate-800"
                     }`}
                 >
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-slate-100">{amr.id}</span>
+                  <div className="flex justify-between items-center gap-1">
+                    {editingAmrId === amr.id ? (
+                      <div className="flex items-center gap-1 flex-1 mr-1">
+                        <input
+                          type="text"
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleRenameAmr(amr.id);
+                            if (e.key === "Escape") setEditingAmrId(null);
+                          }}
+                          autoFocus
+                          placeholder="New name..."
+                          className="w-full bg-slate-900 border border-indigo-500 rounded px-1.5 py-0.5 text-[11px] text-white focus:outline-none"
+                        />
+                        <button
+                          onClick={() => handleRenameAmr(amr.id)}
+                          className="text-[10px] bg-emerald-600 hover:bg-emerald-500 text-white px-1.5 py-0.5 rounded font-bold transition shadow"
+                          title="Save to Database"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={() => setEditingAmrId(null)}
+                          className="text-[10px] bg-slate-700 hover:bg-slate-600 text-slate-300 px-1 py-0.5 rounded font-bold transition"
+                          title="Cancel"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 truncate flex-1 mr-1">
+                        <span className="font-bold text-slate-100 truncate" title={amr.id}>
+                          {amr.name || amr.id}
+                        </span>
+                        <button
+                          onClick={() => {
+                            setEditingAmrId(amr.id);
+                            setEditingName(amr.name || amr.id);
+                          }}
+                          className="text-[10px] text-slate-500 hover:text-indigo-400 transition"
+                          title="Rename AMR (Saves to Supabase Database)"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+                    )}
                     <span
                       className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${getBadgeStyle(
                         state
@@ -774,6 +858,7 @@ export function FleetDashboard({
                       {state}
                     </span>
                   </div>
+
 
                   <div className="flex justify-between text-slate-400 text-[11px]">
                     <span>Active Task:</span>

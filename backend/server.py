@@ -67,6 +67,11 @@ class SpawnAMRRequest(BaseModel):
     start_node: str
 
 
+class RenameAMRRequest(BaseModel):
+    name: str
+
+
+
 def build_app(config: Config) -> FastAPI:
     """Build the FastAPI app: REST endpoints, WebSocket broadcast, tick loop, and P2P UDP mesh."""
     graph = load_map(config.map)
@@ -431,6 +436,34 @@ def build_app(config: Config) -> FastAPI:
             "removed_amr_id": amr_id,
             "message": f"AMR '{amr_id}' successfully decommissioned and station freed.",
         }
+
+    @app.post("/api/amrs/{amr_id}/rename")
+    def rename_amr_endpoint(amr_id: str, req: RenameAMRRequest) -> dict:
+        """Update an AMR's display name locally and persist to Supabase."""
+        new_name = req.name.strip()
+        if not new_name:
+            raise HTTPException(status_code=422, detail="AMR name cannot be empty.")
+        if amr_id not in simulation.amrs:
+            raise HTTPException(status_code=404, detail=f"AMR '{amr_id}' not found in active fleet.")
+        
+        # 1. Update in-memory simulation
+        simulation.rename_amr(amr_id, new_name)
+
+        # 2. Persist to Supabase
+        db_persisted = False
+        try:
+            from backend.db import rename_amr_in_db
+            db_persisted = rename_amr_in_db(amr_id, new_name)
+        except Exception:
+            pass
+
+        return {
+            "status": "ok",
+            "amr_id": amr_id,
+            "name": new_name,
+            "persisted_to_supabase": db_persisted,
+        }
+
 
     @app.post("/api/amrs/register")
     def register_amr(req: AMRRegisterRequest) -> dict:

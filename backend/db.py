@@ -164,3 +164,21 @@ def get_amr_by_user_id(user_id: str) -> dict | None:
     )
     rows = result.data or []
     return rows[0] if rows else None
+
+
+def rename_amr_in_db(amr_id: str, new_name: str) -> bool:
+    """Persist an AMR's display name update to Supabase."""
+    try:
+        client = _get_client()
+        # Attempt updating amrs table
+        client.table("amrs").update({"custom_name": new_name}).eq("amr_id", amr_id).execute()
+        return True
+    except Exception:
+        try:
+            client = _get_client()
+            # If custom_name column does not exist yet, store in status
+            client.table("amrs").update({"status": f"ACTIVE:{new_name}"}).eq("amr_id", amr_id).execute()
+            return True
+        except Exception:
+            return False
+

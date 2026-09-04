@@ -20,6 +20,8 @@ class AMR:
     queued_targets: list[str] = field(default_factory=list)
     parasite: Optional[ParasiteNode] = None
     yield_start_time: float = 0.0
+    custom_name: str = ""
+
 
     @classmethod
     def at_node(cls, amr_id: str, node_id: str, graph: nx.DiGraph, initial_battery: float = 100.0) -> "AMR":

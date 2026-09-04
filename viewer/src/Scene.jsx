@@ -462,34 +462,74 @@ function AmrModel({ amr, map }) {
         )}
       </group>
 
-      {/* Floating Status & Telemetry Tag */}
-      <Html position={[0, chassisHeight + 0.65, 0]} center distanceFactor={16}>
+      {/* Floating Status & Telemetry Typography - Clean, Frameless Floating Text */}
+      <Html position={[0, chassisHeight + 0.35, amrWidth * 0.5 + 0.45]} center distanceFactor={35}>
         <div
           style={{
-            padding: "3px 8px",
-            borderRadius: "6px",
-            background: "rgba(15, 23, 42, 0.92)",
-            color: amr.is_remote ? "#0284c7" : "#f8fafc",
-            border: `1.5px solid ${statusColor}`,
-            boxShadow: "0 4px 14px rgba(0,0,0,0.3)",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: "2px",
-            fontSize: "11px",
-            fontFamily: "monospace",
+            gap: "1px",
+            fontSize: "7.5px",
+            fontFamily: "Inter, system-ui, sans-serif",
             whiteSpace: "nowrap",
             pointerEvents: "none",
+            userSelect: "none",
           }}
         >
-          <span style={{ fontWeight: 800 }}>{amr.is_remote ? `📡 ${amr.id} (Remote)` : amr.id}</span>
-          <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "9px" }}>
-            <span style={{ color: statusColor, fontWeight: 700 }}>{amr.state_label || "IDLE"}</span>
-            <span style={{ color: "#94a3b8" }}>• {amr.battery_soc ?? 100}%</span>
-            {hasPayload && <span style={{ color: "#f59e0b" }}>📦 Payload</span>}
+          {/* Main Name with Status Glow Dot */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "3.5px",
+              padding: "1px 4px",
+              borderRadius: "3px",
+              background: "rgba(2, 6, 23, 0.35)",
+              backdropFilter: "blur(2px)",
+            }}
+          >
+            <span
+              style={{
+                width: "4.5px",
+                height: "4.5px",
+                borderRadius: "50%",
+                background: statusColor,
+                boxShadow: `0 0 5px ${statusColor}`,
+              }}
+            />
+            <span
+              style={{
+                fontWeight: 800,
+                letterSpacing: "0.02em",
+                color: amr.is_remote ? "#38bdf8" : "#f8fafc",
+                textShadow: "0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.8)",
+              }}
+            >
+              {amr.name || (amr.is_remote ? `📡 ${amr.id}` : amr.id)}
+            </span>
+          </div>
+
+          {/* Subtitle Status & Battery */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "3px",
+              fontSize: "6.5px",
+              fontWeight: 600,
+              textShadow: "0 1px 3px rgba(0,0,0,0.9)",
+            }}
+          >
+            <span style={{ color: statusColor }}>{amr.state_label || "IDLE"}</span>
+            <span style={{ color: "#cbd5e1" }}>• {amr.battery_soc ?? 100}%</span>
+            {hasPayload && <span style={{ color: "#fbbf24" }}>📦</span>}
           </div>
         </div>
       </Html>
+
+
+
 
       {/* 9. Heavy Industrial 4-Wheel Assembly */}
       {wheelPositions.map((pos, i) => (

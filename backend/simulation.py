@@ -1051,10 +1051,19 @@ class Simulation:
                     a.colliding = True
                     b.colliding = True
 
+    def rename_amr(self, amr_id: str, new_name: str) -> bool:
+        """Update an AMR's display name."""
+        with self._amrs_lock:
+            if amr := self.amrs.get(amr_id):
+                amr.custom_name = new_name
+                return True
+            return False
+
     def snapshot(self) -> list[dict]:
         local_snapshots = [
             {
                 "id": amr.id,
+                "name": amr.custom_name or amr.id,
                 "current_node": amr.current_node,
                 "position": {"x": amr.x, "y": amr.y},
                 "heading": amr.heading,
@@ -1072,6 +1081,7 @@ class Simulation:
         remote_snapshots = [
             {
                 "id": r_amr.get("id"),
+                "name": r_amr.get("name") or r_amr.get("id"),
                 "current_node": r_amr.get("current_node"),
                 "position": r_amr.get("position", {"x": 0.0, "y": 0.0}),
                 "heading": r_amr.get("heading", 0.0),
@@ -1087,3 +1097,4 @@ class Simulation:
             for r_amr in self.remote_amrs.values()
         ]
         return local_snapshots + remote_snapshots
+
