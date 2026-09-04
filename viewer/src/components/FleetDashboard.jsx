@@ -862,8 +862,21 @@ export function FleetDashboard({
 
                   <div className="flex justify-between text-slate-400 text-[11px]">
                     <span>Active Task:</span>
-                    <span className="text-slate-200 font-medium truncate max-w-[90px]">
-                      {amr.active_task || "Idle"}
+                    <span
+                      className="text-slate-200 font-medium truncate max-w-[105px]"
+                      title={
+                        amr.active_task
+                          ? amr.has_payload || amr.subtask === "DROPOFF"
+                            ? `${amr.active_task} (Loaded 📦 Delivering)`
+                            : `${amr.active_task} (Empty ➔ Pickup Dock)`
+                          : "Idle"
+                      }
+                    >
+                      {amr.active_task
+                        ? amr.has_payload || amr.subtask === "DROPOFF"
+                          ? `${amr.active_task} 📦`
+                          : `${amr.active_task} (Pickup)`
+                        : "Idle"}
                     </span>
                   </div>
 

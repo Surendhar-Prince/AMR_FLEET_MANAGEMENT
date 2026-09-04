@@ -244,6 +244,8 @@ class UDPNetworkManager:
                         "state_label": amr.state_label,
                         "battery_soc": amr.parasite.battery_soc if amr.parasite else 100.0,
                         "active_task": amr.parasite.active_task_id if amr.parasite else None,
+                        "has_payload": bool(amr.parasite and amr.parasite.active_task_id and amr.parasite.active_subtask == "DROPOFF"),
+                        "subtask": amr.parasite.active_subtask if amr.parasite else None,
                     }
                     self.broadcast_amr_beacon(beacon_data)
 

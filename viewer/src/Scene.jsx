@@ -294,7 +294,7 @@ function AmrModel({ amr, map }) {
   const liftHeightRef = useRef(0.02);
 
   const isMoving = amr.path && amr.path.length > 0;
-  const hasPayload = Boolean(amr.active_task && amr.state_label !== "IDLE");
+  const hasPayload = Boolean(amr.has_payload || (amr.active_task && amr.subtask === "DROPOFF"));
 
   useFrame((_, delta) => {
     // 1. Wheel Kinetic Rotation

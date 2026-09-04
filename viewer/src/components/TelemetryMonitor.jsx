@@ -685,7 +685,13 @@ export function TelemetryMonitor({ amrs, isStandalone = false }) {
                     </div>
                     <div>
                       <span className="text-slate-400">Active Task:</span>{" "}
-                      <span className="font-mono text-cyan-300">{amr.active_task || "None (Idle)"}</span>
+                      <span className="font-mono text-cyan-300">
+                        {amr.active_task
+                          ? amr.has_payload || amr.subtask === "DROPOFF"
+                            ? `${amr.active_task} (Loaded 📦)`
+                            : `${amr.active_task} (Pickup En Route)`
+                          : "None (Idle)"}
+                      </span>
                     </div>
                     <div>
                       <span className="text-slate-400">Position (X, Y):</span>{" "}
