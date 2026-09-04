@@ -612,8 +612,8 @@ class Simulation:
                     elif amr.state_label == "CHARGING":
                         amr.state_label = "IDLE"
 
-                # Autonomous emergency task surrender and return to closest vacant charge bay when battery is low (< 18%)
-                if amr.parasite.battery_soc <= 18.0 and amr.current_node not in charging_bays and amr.state_label != "CHARGING":
+                # Autonomous emergency task surrender and return to closest vacant charge bay when battery reaches critical emergency (< 8%)
+                if amr.parasite.battery_soc <= 8.0 and amr.current_node not in charging_bays and amr.state_label != "CHARGING":
                     target_charging_bay = self.get_charging_node(from_node=amr.current_node)
                     if amr.parasite.active_task_id:
                         surrender_tid = amr.parasite.active_task_id
@@ -647,6 +647,26 @@ class Simulation:
                             amr.state_label = "LOW_BATTERY"
                         except Exception:
                             pass
+
+                # Proactive idle charging: top-up before new tasks when battery is <= 30%
+                if (
+                    not amr.path
+                    and not amr.queued_targets
+                    and not amr.parasite.active_task_id
+                    and not amr.parasite.cbba.state.bundle
+                    and amr.parasite.battery_soc <= 30.0
+                    and amr.current_node not in charging_bays
+                    and amr.state_label != "CHARGING"
+                ):
+                    target_charging_bay = self.get_charging_node(from_node=amr.current_node)
+                    try:
+                        c_graph = self._build_congested_graph(amr.id)
+                        charge_path = astar_path(c_graph, amr.current_node, target_charging_bay, blocked_nodes=failed_nodes)
+                        amr.path = charge_path[1:]
+                        amr.progress = 0.0
+                        amr.state_label = "TRANSIT"
+                    except Exception:
+                        pass
 
                 # Proactive advance siding evacuation: if a remote AMR is delivering to our station, vacate in advance!
                 if not amr.path and not amr.queued_targets and amr.parasite and not amr.parasite.active_task_id:

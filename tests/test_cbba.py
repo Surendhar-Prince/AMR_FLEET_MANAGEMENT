@@ -82,3 +82,19 @@ def test_cbba_outbid_trimming(test_graph):
     # AMR 1 must have released t1 from its bundle
     assert "t1" not in engine.state.bundle
     assert engine.state.winning_agents["t1"] == "amr-2"
+
+
+def test_cbba_predictive_battery_feasibility(test_graph):
+    """Verify AMR rejects task when battery is insufficient for round-trip + charger return margin."""
+    engine = CBBAEngine(agent_id="amr-1", graph=test_graph, max_bundle_size=2)
+    # Long task from n1 to n3 (distance = 10 units)
+    long_task = Task(id="t_long", pickup_node="n1", dropoff_node="n3", priority=1)
+
+    # 1. High battery (100%): Should place valid positive bid
+    bid_full = engine.calculate_bid(long_task, current_node="n1", battery_soc=100.0)
+    assert bid_full > 0.0
+
+    # 2. Low battery (12%): Insufficient for pickup + loaded dropoff + charger return + safety margin
+    bid_low = engine.calculate_bid(long_task, current_node="n1", battery_soc=12.0)
+    assert bid_low == 0.0
+

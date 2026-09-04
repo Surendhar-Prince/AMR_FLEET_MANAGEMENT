@@ -34,10 +34,6 @@ class CBBAEngine:
         if failed_nodes and task.dropoff_node in failed_nodes:
             return 0.0
 
-        # If battery is critical (< 20%), robot cannot accept tasks and must recharge!
-        if battery_soc < 20.0:
-            return 0.0
-
         try:
             # Build dynamic congestion graph with extra weight on occupied stations
             congested_graph = self.graph.copy()
@@ -57,7 +53,38 @@ class CBBAEngine:
             path_to_dropoff = astar_path(congested_graph, task.pickup_node, task.dropoff_node, blocked_nodes=failed_nodes)
             cost_to_dropoff = path_length(congested_graph, path_to_dropoff)
 
-            # 3. Dynamic Backtrack & Turnaround Penalty (Penalize driving back-and-forth over identical corridor)
+            # 3. Distance from dropoff node to the nearest charging bay
+            charging_nodes = [
+                n for n, d in self.graph.nodes(data=True)
+                if d.get("type") == "charging" or "charge" in str(n).lower()
+            ]
+            if not charging_nodes:
+                charging_nodes = ["n14"] if "n14" in self.graph.nodes else list(self.graph.nodes)[:1]
+
+            cost_to_charger = float("inf")
+            for bay in charging_nodes:
+                try:
+                    p_charge = astar_path(congested_graph, task.dropoff_node, bay, blocked_nodes=failed_nodes)
+                    d_charge = path_length(congested_graph, p_charge)
+                    if d_charge < cost_to_charger:
+                        cost_to_charger = d_charge
+                except Exception:
+                    pass
+            if cost_to_charger == float("inf"):
+                cost_to_charger = 0.0
+
+            # 4. Total round-trip predictive energy calculation
+            # Motion drain rate: 0.38 per unit distance. Payload multiplier: 1.6
+            e_pickup = cost_to_pickup * 0.38 * 1.0
+            e_dropoff = cost_to_dropoff * 0.38 * 1.6
+            e_charger = cost_to_charger * 0.38 * 1.0
+            e_total_required = e_pickup + e_dropoff + e_charger + 6.0  # 6.0% reserve buffer
+
+            # HARD FEASIBILITY CHECK: if battery cannot sustain round-trip + return to charger, NEVER BID!
+            if battery_soc < e_total_required:
+                return 0.0
+
+            # 5. Dynamic Backtrack & Turnaround Penalty (Penalize driving back-and-forth over identical corridor)
             backtrack_penalty = 0.0
             if len(path_to_pickup) > 1 and len(path_to_dropoff) > 1:
                 pickup_edges = set(zip(path_to_pickup[:-1], path_to_pickup[1:]))
@@ -65,7 +92,7 @@ class CBBAEngine:
                 overlap_count = len(pickup_edges.intersection(dropoff_reverse_edges))
                 backtrack_penalty = overlap_count * 8.0  # Turnaround & double-transit traffic latency
 
-            # 4. Queue Load Balancing Penalty: busy robots with queued tasks defer to idle robots
+            # 6. Queue Load Balancing Penalty: busy robots with queued tasks defer to idle robots
             queue_penalty = len(self.state.bundle) * 15.0
 
             total_true_cost = cost_to_pickup + cost_to_dropoff + backtrack_penalty + queue_penalty
