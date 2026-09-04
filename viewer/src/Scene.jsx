@@ -462,7 +462,7 @@ function AmrModel({ amr, map }) {
         )}
       </group>
 
-      {/* Floating Status & Telemetry Typography - Clean, Frameless Floating Text */}
+      {/* Floating Status & Telemetry Typography - Completely Transparent Background & Black Typography */}
       <Html position={[0, chassisHeight + 0.35, amrWidth * 0.5 + 0.45]} center distanceFactor={35}>
         <div
           style={{
@@ -475,6 +475,7 @@ function AmrModel({ amr, map }) {
             whiteSpace: "nowrap",
             pointerEvents: "none",
             userSelect: "none",
+            background: "none",
           }}
         >
           {/* Main Name with Status Glow Dot */}
@@ -483,10 +484,7 @@ function AmrModel({ amr, map }) {
               display: "flex",
               alignItems: "center",
               gap: "3.5px",
-              padding: "1px 4px",
-              borderRadius: "3px",
-              background: "rgba(2, 6, 23, 0.35)",
-              backdropFilter: "blur(2px)",
+              background: "none",
             }}
           >
             <span
@@ -495,38 +493,40 @@ function AmrModel({ amr, map }) {
                 height: "4.5px",
                 borderRadius: "50%",
                 background: statusColor,
-                boxShadow: `0 0 5px ${statusColor}`,
+                boxShadow: `0 0 4px ${statusColor}`,
               }}
             />
             <span
               style={{
                 fontWeight: 800,
                 letterSpacing: "0.02em",
-                color: amr.is_remote ? "#38bdf8" : "#f8fafc",
-                textShadow: "0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.8)",
+                color: "#000000",
+                textShadow: "0 0 2px rgba(255,255,255,0.8)",
               }}
             >
               {amr.name || (amr.is_remote ? `📡 ${amr.id}` : amr.id)}
             </span>
           </div>
 
-          {/* Subtitle Status & Battery */}
+          {/* Subtitle Status & Battery in Black */}
           <div
             style={{
               display: "flex",
               alignItems: "center",
               gap: "3px",
               fontSize: "6.5px",
-              fontWeight: 600,
-              textShadow: "0 1px 3px rgba(0,0,0,0.9)",
+              fontWeight: 700,
+              color: "#000000",
+              textShadow: "0 0 2px rgba(255,255,255,0.8)",
             }}
           >
-            <span style={{ color: statusColor }}>{amr.state_label || "IDLE"}</span>
-            <span style={{ color: "#cbd5e1" }}>• {amr.battery_soc ?? 100}%</span>
-            {hasPayload && <span style={{ color: "#fbbf24" }}>📦</span>}
+            <span>{amr.state_label || "IDLE"}</span>
+            <span>• {amr.battery_soc ?? 100}%</span>
+            {hasPayload && <span>📦</span>}
           </div>
         </div>
       </Html>
+
 
 
 
