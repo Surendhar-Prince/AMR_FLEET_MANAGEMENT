@@ -4,7 +4,7 @@ from backend.beacon import (
     decode_beacon_message,
     encode_beacon_message,
     goal_from_path,
-    publish_snapshot,
+    publish_snapshot ,
 )
 
 
