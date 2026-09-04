@@ -16,25 +16,39 @@ export function RegistrationScreen({ onRegistered }) {
     start_node: "",
   });
   const [nodes, setNodes] = useState([]);
+  const [occupiedNodes, setOccupiedNodes] = useState(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [assigned, setAssigned] = useState(null);
 
-  // Fetch dynamic map nodes on mount
+  // Fetch dynamic map nodes and occupied stations on mount
   useEffect(() => {
-    fetch(apiUrl("/api/map"))
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.nodes && data.nodes.length > 0) {
-          setNodes(data.nodes);
+    Promise.all([
+      fetch(apiUrl("/api/map")).then((r) => (r.ok ? r.json() : {})),
+      fetch(apiUrl("/api/amrs")).then((r) => (r.ok ? r.json() : [])),
+    ])
+      .then(([mapData, amrsData]) => {
+        const occupied = new Set();
+        if (Array.isArray(amrsData)) {
+          amrsData.forEach((a) => {
+            if (a.current_node) occupied.add(a.current_node);
+          });
+        }
+        setOccupiedNodes(occupied);
+
+        if (mapData.nodes && mapData.nodes.length > 0) {
+          setNodes(mapData.nodes);
+          const firstVacant = mapData.nodes.find((n) => !occupied.has(n.id));
+          const chosenNode = firstVacant ? firstVacant.id : mapData.nodes[0].id;
           setForm((prev) => ({
             ...prev,
-            start_node: prev.start_node || data.nodes[0].id,
+            start_node: prev.start_node || chosenNode,
           }));
         }
       })
-      .catch((err) => console.error("Failed to load dynamic map nodes:", err));
+      .catch((err) => console.error("Failed to load map/amr data:", err));
   }, []);
+
 
   function handleChange(e) {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -247,12 +261,16 @@ export function RegistrationScreen({ onRegistered }) {
                         onChange={handleChange}
                         className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
                       >
-                        {nodes.map((n) => (
-                          <option key={n.id} value={n.id}>
-                            Station {n.id} ({n.type || "Dock"})
-                          </option>
-                        ))}
+                        {nodes.map((n) => {
+                          const isOcc = occupiedNodes.has(n.id);
+                          return (
+                            <option key={n.id} value={n.id} disabled={isOcc}>
+                              Station {n.id} ({n.type || "Dock"}) {isOcc ? "⛔ [Occupied]" : "✅ [Vacant]"}
+                            </option>
+                          );
+                        })}
                       </select>
+
                     ) : (
                       <input
                         type="text"
