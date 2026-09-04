@@ -438,7 +438,10 @@ def build_app(config: Config) -> FastAPI:
         }
 
     @app.post("/api/amrs/{amr_id}/rename")
+    @app.put("/api/amrs/{amr_id}/rename")
+    @app.patch("/api/amrs/{amr_id}/rename")
     def rename_amr_endpoint(amr_id: str, req: RenameAMRRequest) -> dict:
+
         """Update an AMR's display name locally and persist to Supabase."""
         new_name = req.name.strip()
         if not new_name:
